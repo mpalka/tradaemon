@@ -1,0 +1,56 @@
+# Trademon configuration.
+# mode: "paper" (default, virtual money) or "live" (real funds — requires API keys
+# in .env and a conscious decision; see README).
+mode: paper
+
+exchange:
+  id: binance
+  # Top-liquidity USDT pairs only — the cost model (2 bps slippage) is honest
+  # for majors; thinner pairs would trade worse than the backtest suggests.
+  symbols: [BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT, XRP/USDT,
+            DOGE/USDT, ADA/USDT, LINK/USDT, AVAX/USDT, LTC/USDT]
+  # 4h chosen from a 365-day, 4-pair sweep (2026-07): best OOS combo on the
+  # last 60 days (+0.2% vs -12.5% buy&hold), stable across thresholds.
+  # On 1m candles the median TP distance never clears round-trip costs.
+  timeframe: 4h
+
+paths:
+  data_dir: data
+  models_dir: models
+  runtime_dir: runtime   # state.json + trades.jsonl (journal), shared with dashboard
+
+costs:
+  taker_fee: 0.001       # Binance spot default 0.1%
+  maker_fee: 0.001
+  slippage_bps: 2.0      # additional adverse slippage assumed per fill
+
+strategy:
+  atr_period: 14
+  tp_atr_mult: 1.5       # take-profit distance in ATR units (sweep2 best OOS combo)
+  sl_atr_mult: 2.0       # stop-loss distance in ATR units
+  horizon_bars: 12       # triple-barrier timeout, in bars (12 x 4h = 2 days)
+  prob_threshold: 0.55   # minimal model probability to open a position
+                         # (lower = more trades; 0.50 ~ +39% vs 0.60, still ~0 edge)
+  warmup_bars: 300       # history needed before features are valid
+
+paper:
+  initial_capital: 1000.0
+
+risk:
+  position_pct: 0.10          # fraction of current equity per position
+  max_open_positions: 3   # 3 x 10% = max 30% equity exposure; crypto pairs are
+                          # highly correlated, so open positions cluster
+  daily_loss_limit_pct: 0.03  # kill-switch: stop opening positions after -3% day
+
+model:
+  train_window_days: 365
+  validation_days: 60
+  n_folds: 5
+
+# Optional live A/B: each variant is a separate paper book trading the same
+# candles in parallel, compared on the dashboard's "Warianty" tab. Comment out
+# to run a single "default" book. Overrides apply on top of `strategy`/`risk`.
+variants:
+  - {name: prog_055, prob_threshold: 0.55}
+  - {name: prog_050, prob_threshold: 0.50}
+  - {name: prog_065, prob_threshold: 0.65}

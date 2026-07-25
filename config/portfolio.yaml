@@ -1,0 +1,25 @@
+# Portfolio manager (module 2) — slow, systematic investing. Paper only,
+# educational. Value = discipline + costs + diversification, NOT prediction.
+source: yahoo   # free daily data via Yahoo Finance chart API (keyless)
+initial_capital: 10000.0
+book_name: core
+bars_per_year: 252   # ETF trading days per year (Sharpe annualization)
+
+# Classic diversified basket. Symbols are plain Yahoo tickers (SPY, TLT, GLD).
+# Weights are normalized, so they need not sum to 1.
+assets:
+  - {symbol: SPY, target_weight: 0.50, safe: false}   # US equities
+  - {symbol: TLT, target_weight: 0.30, safe: true}    # long-term US treasuries
+  - {symbol: GLD, target_weight: 0.20, safe: false}   # gold
+
+rebalance:
+  cadence_days: 90          # quarterly at the latest
+  drift_threshold_pct: 5.0  # ...or sooner if any weight drifts >5 percentage points
+
+# Optional trend filter (systematic tilt). OFF by default — pure discipline first.
+# When on: an asset trading below its `ma_days` average is parked in `safe_asset`
+# (or cash if none), and re-bought when it recovers above the average.
+trend:
+  enabled: false
+  ma_days: 200
+  safe_asset: TLT

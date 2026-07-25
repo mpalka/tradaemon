@@ -1,0 +1,56 @@
+services:
+  bot:
+    build: .
+    command: python -m trademon.engine
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./runtime:/app/runtime
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    command: streamlit run src/trademon/dashboard/app.py --server.address 0.0.0.0 --server.port 8501
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./runtime:/app/runtime
+    restart: unless-stopped
+
+  # Module 2: portfolio manager (slow investing, paper). Daily loop; rebalances
+  # a diversified ETF basket toward target weights. Shares the dashboard.
+  portfolio:
+    build: .
+    command: python -m trademon.portfolio
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./runtime:/app/runtime
+    restart: unless-stopped
+
+  # Weekly maintenance: refresh data + retrain behind the safety gate.
+  # The bot hot-reloads promoted models on its next candle (no restart needed).
+  refresher:
+    build: .
+    command: >
+      sh -c "while true; do
+        python scripts/refresh.py || echo 'refresh gate failed or errored — kept current model';
+        sleep 604800;
+      done"
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./runtime:/app/runtime
+    restart: unless-stopped
