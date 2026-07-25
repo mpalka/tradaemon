@@ -1,16 +1,24 @@
-# Trademon
+# Tradaemon
 
-Bot scalpingowy na kryptowaluty oparty o ML (LightGBM + triple-barrier labeling),
-z backtestem uwzględniającym koszty transakcyjne i trybem **paper trading**
-(wirtualne środki, realne ceny z Binance przez CCXT).
+Narzędzie edukacyjne: **dwa równoległe moduły** do zabawy algorytmem i dyscypliną.
 
-> **Ostrzeżenie**: krótkoterminowy trading algorytmiczny jest wysoce ryzykowny —
-> prowizje i poślizg zjadają większość zysku, a modele łatwo się przeuczają.
-> Domyślny tryb to `paper`. Nie przechodź na `live`, dopóki backtest **i** kilka
-> dni paper tradingu nie pokażą dodatniego wyniku po kosztach. To nie jest
-> porada inwestycyjna.
+1. **Moduł 1 — Krypto-scalper** (LightGBM, 4h, 10 par USDT, paper trading)
+   Krótkoterminowy trading oparty o machine learning z triple-barrier labeling,
+   walk-forward validation i backtestem uwzględniającym koszty. Backtest wykazuje
+   przewagę ~0 po kosztach — moduł pełni rolę **laboratorium edukacyjnego**.
+
+2. **Moduł 2 — Zarządca portfela** (rebalanser ETF-ów, paper trading)
+   Systematyczne przywracanie docelowych proporcji koszyka SPY/TLT/GLD,
+   z opcjonalnym filtrem trendu. Backtest na 10 latach pokazuje, że rebalansowanie
+   przycina zwycięzców w hossie — jego wartość to dyscyplina i redukcja ryzyka, nie alpha.
+
+> **Ostrzeżenie**: Oba moduły to **paper trading** (wirtualne środki).
+> Decyzja o realnych środkach, gitHub kluczach API czy live tradingu to Twoja
+> osobna, świadoma decyzja. To nie jest porada inwestycyjna.
 
 ## Szybki start (lokalnie)
+
+### Moduł 1: Krypto-scalper
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
@@ -21,115 +29,233 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 # 2. Wytrenuj model (walk-forward, raport AUC per fold)
 .venv/bin/python scripts/train.py
 
-# 3. Backtest po kosztach na ostatnich 14 dniach
+# 3. Backtest po kosztach
 .venv/bin/python scripts/backtest.py
 
-# 4. Paper trading na żywych cenach
-.venv/bin/python -m trademon.engine
+# 4. Paper trading (jeden dzień lub pętla)
+.venv/bin/python -m trademon.engine --once        # jeden dzień
+.venv/bin/python -m trademon.engine                # pętla 4h (śpi między świecami)
+```
 
-# 5. Dashboard (osobny terminal): http://localhost:8501
+### Moduł 2: Zarządca portfela
+
+```bash
+# Backtest vs "kup i trzymaj" na 10 latach (pobiera z Yahoo)
+.venv/bin/python scripts/portfolio_backtest.py --years 10
+
+# Paper: jeden dzień, pętla dzienna, lub replay historii
+.venv/bin/python -m trademon.portfolio --once     # jeden dzień
+.venv/bin/python -m trademon.portfolio --backfill # pełna historia (5452 dni)
+.venv/bin/python -m trademon.portfolio             # pętla dzienna
+```
+
+### Dashboard (oba moduły)
+
+```bash
+# Terminal osobny: http://localhost:8501
 .venv/bin/streamlit run src/trademon/dashboard/app.py
 ```
 
-macOS: LightGBM wymaga `brew install libomp` (bez niego kod automatycznie
+**macOS**: LightGBM wymaga `brew install libomp` (bez niego kod automatycznie
 używa sklearn `HistGradientBoostingClassifier`).
 
-## Docker
+## Docker (OrbStack / Docker Desktop)
 
 ```bash
 docker compose up --build
 ```
 
-Uruchamia bota (paper), dashboard na `localhost:8501` oraz `refresher`
-(cotygodniowe utrzymanie). Dane, model i stan runtime są montowane z katalogów
-`./data`, `./models`, `./runtime`.
+Uruchamia **cztery serwisy**:
+
+| Serwis | Rola |
+|--------|------|
+| `bot` | Moduł 1: krypto-scalper, 3 warianty A/B na 10 parach USDT |
+| `dashboard` | Panel na `localhost:8501` (oba moduły, UI dla początkującego) |
+| `portfolio` | Moduł 2: zarządca portfela, rebalancing ETF-ów |
+| `refresher` | Cotygodniowe trenowanie (bramka bezpieczeństwa: promuje tylko + wynik) |
+
+Dane, modele i stan runtime montowane z `./data`, `./models`, `./runtime`.
+Każdy serwis ma własny dziennik (logs): `docker compose logs -f bot` itp.
 
 ## Dashboard (localhost:8501)
 
-Zakładki: **Przegląd** (kapitał + metryki ryzyka + krzywa vs buy & hold),
-**Analityka** (per para, rozkład wyników, powody wyjścia), **Model** (dlaczego
-bot (nie) handluje — prawdopodobieństwa vs próg), **Warianty** (porównanie A/B
-na żywo), **Eksperymenty** (dziennik backtestów), **Zdrowie** (świeżość danych,
-kill-switch, alerty, status refreshera).
+### Ekran dla początkującego (domyślny widok)
 
-## Utrzymanie (automatyczne)
+Bez żargonu — wszystko po polsku:
 
-Serwis `refresher` co tydzień: pobiera dane → trenuje kandydata bez ostatnich
-`validation_days` → backtest OOS → **bramka** (promuje tylko model bijący
-buy & hold) → podmienia model. Bot łapie nowy model przez hot-reload bez
-restartu. Ręcznie: `python scripts/refresh.py`.
+- **„Ile masz"** — wartość portfela + zmiana (🟢/🔴)
+- **Status bota** — 🟢 działa / 🔴 czeka (ostatni odczyt rynku)
+- **„Jak to szło"** — krzywa kapitału vs szara linia „kup i trzymaj"; przełącznik 7d / 30d / całość
+- **„Co bot trzyma"** — otwarte pozycje jako zdania (np. „kupił ETH za 100 $ — teraz +2 $")
+- **„Dziennik zdarzeń"** — oś czasu z ikonami (kupił, sprzedał, limit strat)
+- **„Szczegóły dla dociekliwych"** (zwinięte) — siedem zakładek technicznych z objaśnieniami
+
+### Zakładki techniczne (pod expander)
+
+- **Przegląd** — metryki (Sharpe, drawdown, win-rate), benchmark
+- **Analityka** — per para, rozkład wyników, powody wyjścia
+- **Model** — Why nie handluje: prawdopodobieństwa vs próg
+- **Warianty** — porównanie A/B trei ksiąg live
+- **Eksperymenty** — dziennik backtestów, eksport raportów
+- **Zdrowie** — świeżość danych, kill-switch, alerty, status refreshera
+- **(Portfel)** — gdy wybrany moduł 2: alokacja, rebalanse, drift wag
+
+### Przełącznik modułu (u góry)
+
+**Krypto-scalper · Zarządca portfela** — zmienia ekran na drugi moduł.
+
+## Utrzymanie (automatyczne — Moduł 1)
+
+Serwis `refresher` co tydzień:
+
+1. Pobiera świeże dane (1m z Binance)
+2. Trenuje kandydata bez ostatnich `validation_days` (validation window)
+3. Backtest OOS na validation_days
+4. **Bramka** (gate): promuje model TYLKO jeśli:
+   - Nie katastrofa (PnL < -10%)
+   - Bije buy & hold (porównanie na tych samych 60 dniach)
+5. Podmienia model, bot łapie go przez hot-reload bez restartu
+
+Ręcznie: `python scripts/refresh.py` (exit: 0=promocja, 2=bramka odrzuca, 1=błąd).
+
+**Moduł 2** nie ma automatycznego trenowania (to rebalanser, nie prognosta).
 
 ## Konfiguracja
 
-Wszystko w [config/config.yaml](config/config.yaml): pary, progi strategii
-(TP/SL w ATR, horyzont, próg prawdopodobieństwa), koszty (prowizja, poślizg)
-oraz limity ryzyka (wielkość pozycji, max pozycji, dzienny kill-switch, próg
-alertu obsunięcia).
+### Moduł 1: Krypto-scalper
 
-**Warianty A/B na żywo**: sekcja `variants:` uruchamia kilka konfiguracji
-równolegle na tych samych świecach (każda z własnym portfelem w `runtime/<name>/`),
-porównywanych w zakładce Warianty. Brak sekcji = jedna księga `default`.
+[config/config.yaml](config/config.yaml):
 
-**Alerty na zewnątrz** (opcjonalne): ustaw `ALERT_WEBHOOK_URL` w `.env`
-(Discord/Slack). Bez tego alerty są tylko lokalne (dziennik + panel).
+- `pairs` — lista par USDT (domyślnie 10 najpłynniejszych)
+- `strategy` — timeframe (4h), TP/SL w ATR, horyzont, próg prawdopodobieństwa
+- `costs` — prowizja, poślizg na każdym fillu
+- `risk` — wielkość pozycji, max pozycji otwartych, dzienny kill-switch, próg alertu DD
+- `variants` — A/B: kilka wariantów testuje się równolegle na tych samych świecach,
+  każdy z własnym `runtime/<name>/`, porównywane w zakładce Warianty. Brak = jedna księga.
+- `primary_variant` — której wariantu pokazać jako „Twój portfel" na głównym ekranie
 
-## Moduł 2: zarządca portfela (wolne inwestowanie)
+**Alerty**: opcjonalny `ALERT_WEBHOOK_URL` w `.env` (Discord/Slack). Domyślnie: dziennik + panel.
 
-Drugi, niezależny moduł obok krypto-scalpera — **rebalanser, nie predyktor**. Jego
-wartość to **dyscyplina, koszty i dywersyfikacja**, nie „alfa". Trzyma zadany koszyk
-ETF-ów (domyślnie SPY/TLT/GLD) i przywraca docelowe proporcje okresowo lub gdy waga
-odjedzie ponad próg. Paper only; dane dzienne z Yahoo Finance (za darmo, bez klucza).
+### Moduł 2: Zarządca portfela
+
+[config/portfolio.yaml](config/portfolio.yaml):
+
+- `assets` — koszyk ETF-ów z wagami (domyślnie SPY 50% / TLT 30% / GLD 20%)
+- `rebalance` — cadence (dni) i próg driftu (%)
+- `trend` — filtr: czy trzymać aktywo tylko powyżej średniej (edukacyjny — zmniejsza zwrot w hossie)
+- `costs` — TER roczny (drag), prowizja transakcji
+- `initial_capital` — wirtualny kapitał (domyślnie 10000 $)
+
+## Moduł 2: Zarządca portfela (wolne inwestowanie)
+
+Drugi, niezależny moduł — **rebalanser, nie prognosta**. Wartość = dyscyplina + redukcja
+ryzyka, nie „alfa". Paper only; dane dzienne z **Yahoo Finance** (za darmo, bez klucza).
+
+### Backtest
 
 ```bash
-# Backtest po kosztach vs „kup i trzymaj" (pobiera dane z Yahoo)
-.venv/bin/python scripts/portfolio_backtest.py --years 10
-
-# Paper: jeden dzień (--once), pętla dzienna (bez flagi), albo pełna historia
-.venv/bin/python -m trademon.portfolio --backfill   # odtworzenie realnej historii
-.venv/bin/python -m trademon.portfolio              # pętla dzienna forward
+python scripts/portfolio_backtest.py --years 10
 ```
 
-Konfiguracja w [config/portfolio.yaml](config/portfolio.yaml): koszyk i wagi, kadencja
-i próg rebalansu, opcjonalny **filtr trendu** (trzymaj aktywo tylko powyżej średniej
-N-dniowej — premia za ryzyko, nie darmowy obiad). W dashboardzie przełącznik u góry:
-**Krypto-scalper · Zarządca portfela**.
+Wynik na 10 latach (2016–2026) **SPY/TLT/GLD koszyka domyślnego** (50%/30%/20%):
 
-> Uczciwie: rebalansowanie zwykle **obniża** zwrot w silnej hossie akcji (przycina
-> zwycięzców), za to ogranicza zmienność i obsunięcia. To narzędzie edukacyjne, nie
-> porada inwestycyjna — realne środki i konto maklerskie to Twoja osobna decyzja.
+| Metryka | Strategia | Benchmark (kup&hold) | Różnica |
+|---------|-----------|---------------------|---------|
+| Zwrot | +113,9% | +147,5% | –33,6 pkt ❌ |
+| CAGR | 7,94% | 10,38% | –2,44 ppt |
+| Sharpe | 0,77 | 0,69 | +0,08 |
+| Max DD | –24,9% | –34,5% | +9,6 ppt ✓ |
 
-## Panel dla początkującego
+**Lekcja**: rebalansowanie przycina zwycięzców w hossie akcji (dzieje się co kwartał),
+ale zmniejsza obsunięcia. Edukacyjny tool, nie strategia do bogacenia się.
 
-Dashboard otwiera się na ekranie bez żargonu: **„Ile masz"** (wartość + zmiana),
-**status bota** (🟢/🔴), wykres **„Jak to szło"** z linią „kup i trzymaj", karty
-**„co bot teraz trzyma"** po ludzku i **dziennik zdarzeń**. Wskaźniki techniczne
-(Sharpe, drawdown, profit factor) z objaśnieniami siedzą pod **„Szczegóły dla
-dociekliwych"**. Którą księgę A/B pokazać jako „Twój portfel" ustawia `primary_variant`
-w [config/config.yaml](config/config.yaml).
+### Paper trading
 
-## Tryb live (świadoma decyzja)
+```bash
+python -m trademon.portfolio --backfill   # replay pełnej historii (5452 dni)
+python -m trademon.portfolio --once       # jeden dzień
+python -m trademon.portfolio              # pętla dzienna (śpi 6h między checks)
+```
 
-1. Zweryfikuj wyniki paper tradingu (dashboard + `runtime/trades.jsonl`).
-2. Utwórz na giełdzie klucz API **tylko z uprawnieniem trade** (bez wypłat),
-   wpisz do `.env` (wzór: `.env.example`).
-3. Zmień `mode: live` w `config/config.yaml` i zrestartuj bota.
+Dashboard automatycznie odkrywa księgi z `runtime/portfolio/*/state.json` i pokazuje:
+- Kapitał, zmianę, drift wag od celu
+- Wykres vs benchmark
+- Dziennik rebalansów (ikony + opisy zdarzeń)
+- Panel zdrowia (świeżość danych, ostatni rebalans)
+
+
+## Tryb live (Moduł 1 — świadoma decyzja)
+
+> **Moduł 2 (portfel) to paper-only** — rebalancing realnym pieniędzem to
+> osobna decyzja (konto maklerskie, podatki, transfer środków).
+
+Jeśli zdecydujesz się na live trading w Module 1:
+
+1. **Nie rób tego** — backtest wykazuje przewagę ~0 po kosztach; paper trading
+   może pokazać lepiej przez shuffle lub szczęście.
+2. Jeśli naprawdę chcesz: zweryfikuj paper trading (kilka dni, 10+ transakcji
+   bez dużych strat).
+3. Utwórz klucz API na Binance **z uprawnieniem TRADE ONLY** (bez withdrawals).
+4. Wpisz do `.env` (wzór: [.env.example](.env.example)).
+5. Zmień `mode: live` w `config/config.yaml`.
+6. Testuj z małą pozycją — zawsze możliwe są błędy, glitche API, edge casey.
 
 ## Architektura
 
+### Moduł 1 — Krypto-scalper
+
 ```
-dane (CCXT/Parquet) -> cechy -> etykiety triple-barrier -> LightGBM (walk-forward)
-                                                              |
-backtest (koszty: prowizja+poślizg) <--- wspólna symulacja fill'ów ---> silnik live/paper
-                                                              |
-                                       runtime/ (state.json, trades.jsonl) -> dashboard
+CCXT (1m, publiczne API)
+    ↓ Parquet (ohlcv_binance_*.parquet)
+    ↓
+Cechy (engineering.py) + Triple-barrier labeling
+    ↓
+Walk-forward LightGBM ← Backtest (rekonsyliacja z kosztami)
+    ↓
+Silnik (loop.py: feedy > sygnały > orders > executors)
+    ├─→ Paper Executor (simulation)
+    └─→ Live Executor (CCXT) [opcjonalnie]
+        ↓
+Runtime (state.json, trades.jsonl, equity.jsonl, alerts.jsonl)
+        ↓
+Dashboard (panel dla początkującego + techniczne)
 ```
 
-Kluczowa własność: backtester, paper trading i tryb live używają **tej samej**
-logiki wejść/wyjść i tych samych symulacji kosztów (`trademon/execution/fills.py`),
-więc paper trading testuje dokładnie ten kod, który pójdzie na produkcję.
+**Kluczowe**: backtester i silnik paper/live dzielą `fills.py` (tę samą symulację
+kosztów), więc paper testing to dokładnie ten kod, który pójdzie na produkcję.
+
+### Moduł 2 — Zarządca portfela
+
+```
+Yahoo Finance API (daily, bezpłatnie)
+    ↓ Parquet (ohlcv_yahoo_SPY_1d.parquet, itp.)
+    ↓
+Allocator (effective_weights, drift, rebalance_orders)
+    ↓
+Backtest (daily loop, benchmark = buy&hold raz)
+        ↓
+Paper Executor (rebalancing, simulate costs)
+    ↓
+Runtime (state.json, trades.jsonl, equity.jsonl, alerts.jsonl)
+    ↓
+Dashboard (portfel view: alokacja, rebalanse, zdrowie)
+```
+
+**Obie moduły**: wspólny `RuntimeStore` (persystencja, dzienniki), wspólny model
+kosztów, wspólne metryki (Sharpe annualizacja), wspólny dashboard.
 
 ## Testy
 
 ```bash
-.venv/bin/pytest
+pytest
 ```
+
+**74 testy**, pokrycie:
+
+- **Moduł 1**: backtest (ceny, koszty, benchmark), engine (paper), features (engineering),
+  labeling (triple-barrier), fills (prosty/maker/short), funding (alt-data), risk (kill-switch)
+- **Moduł 2**: allocator (drift, trend filter, brak look-ahead), backtest (kapitał,
+  benchmark, koszty rebalansowania), book (izolacja dwóch ksiąg), data (parser Yahoo)
+- **Dashboard**: humanize (mapowanie surowych danych na polskie zdania, emoji)
+
+Ruff lint: 100% czysty.
