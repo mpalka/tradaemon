@@ -1,4 +1,4 @@
-# Trademon configuration.
+# TraDaemon 👹💰 configuration.
 # mode: "paper" (default, virtual money) or "live" (real funds — requires API keys
 # in .env and a conscious decision; see README).
 mode: paper

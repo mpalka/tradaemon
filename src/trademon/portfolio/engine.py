@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None) -> None:
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
-    parser = argparse.ArgumentParser(description="Trademon portfolio manager (paper)")
+    parser = argparse.ArgumentParser(description="TraDaemon 👹💰 portfolio manager (paper)")
     parser.add_argument("--once", action="store_true",
                         help="run a single daily step and exit")
     parser.add_argument("--backfill", action="store_true",

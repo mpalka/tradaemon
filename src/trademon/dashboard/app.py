@@ -1,4 +1,4 @@
-"""Trademon dashboard — read-only lab view over the engine's runtime files.
+"""TraDaemon dashboard — read-only lab view over the engine's runtime files.
 
 Two modules share this dashboard: the crypto scalper and the portfolio manager.
 Each opens on a **beginner screen** (plain Polish, no jargon) with the technical
@@ -22,7 +22,7 @@ from trademon.dashboard import humanize
 from trademon.data.storage import TIMEFRAME_MS
 from trademon.research.log import load_experiments
 
-st.set_page_config(page_title="Trademon", page_icon="chart_with_upwards_trend", layout="wide")
+st.set_page_config(page_title="TraDaemon", page_icon="👹💰", layout="wide")
 
 cfg = load_config()
 runtime = cfg.paths.runtime_dir
@@ -408,7 +408,7 @@ def render_crypto() -> None:
 
 # The module selector lives OUTSIDE the auto-refreshing fragment: switching it must
 # trigger a full rerun (a widget inside a run_every fragment would drop the change).
-st.title("Trademon")
+st.title("TraDaemon 👹💰")
 _module = st.radio("Moduł", ["Krypto-scalper", "Zarządca portfela"],
                    horizontal=True, label_visibility="collapsed")
 

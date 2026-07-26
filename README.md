@@ -1,4 +1,4 @@
-# Tradaemon
+# TraDaemon 👹💰
 
 Narzędzie edukacyjne: **dwa równoległe moduły** do zabawy algorytmem i dyscypliną.
 
