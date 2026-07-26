@@ -313,7 +313,7 @@ def render_html_report(results: list[dict], cfg: Config) -> str:
     period = results[0]["summary"]["period"] if results else {"start": "", "end": ""}
 
     return f"""<!doctype html><html lang="pl"><head><meta charset="utf-8">
-<title>Trademon — raport backtestu</title>
+<title>TraDaemon 👹💰 — raport backtestu</title>
 <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
 <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
 <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
@@ -326,7 +326,7 @@ def render_html_report(results: list[dict], cfg: Config) -> str:
  th:first-child,td:first-child{{text-align:left}} th{{background:#f4f4f4}}
  #chart{{margin-top:1.5rem}}
 </style></head><body>
-<h1>Trademon — raport backtestu</h1>
+<h1>TraDaemon 👹💰 — raport backtestu</h1>
 <p class="sub">Okres: {period['start']} .. {period['end']} · timeframe {cfg.exchange.timeframe}
  · {len(results)} par</p>
 <p class="verdict">WERDYKT: {verdict}</p>
