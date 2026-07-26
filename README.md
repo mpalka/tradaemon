@@ -244,6 +244,47 @@ Dashboard (portfel view: alokacja, rebalanse, zdrowie)
 **Obie moduły**: wspólny `RuntimeStore` (persystencja, dzienniki), wspólny model
 kosztów, wspólne metryki (Sharpe annualizacja), wspólny dashboard.
 
+## Badania ([scripts/research](scripts/research))
+
+Osobny zestaw skryptów do odpowiadania na pytanie „czy ta strategia w ogóle ma
+przewagę". Nie dotykają produkcji — liczą i drukują raport.
+
+Trzy zasady, na których stoją (bo bez nich liczby kłamią):
+
+1. **Model nigdy nie widzi danych, na których go sprawdzamy.** Historia jest
+   cięta na rozłączne 60-dniowe okna; dla każdego okna model uczy się od nowa
+   wyłącznie na świecach sprzed niego.
+2. **Ten sam model kosztów co produkcja** — backtest idzie przez
+   `trademon.backtest.runner`, który dzieli `execution/fills.py` z silnikiem.
+3. **Naiwne punkty odniesienia.** „Zawsze graj na wzrost", „zawsze na spadek",
+   „losowo". Strategia, która ich nie bije, niczego nie udowodniła — a przy
+   porównaniu tylko do „kup i trzymaj" łatwo się oszukać (w bessie każda
+   strategia umiejąca grać na spadek wygląda genialnie).
+
+```bash
+# Ile z przewagi zjadają opłaty? Ten sam model, różne cenniki giełdy.
+.venv/bin/python scripts/research/fee_grid.py --windows 30
+
+# Czy poziomy zysku/straty są dobrze ustawione? Przegląd kombinacji TP/SL.
+.venv/bin/python scripts/research/rr_grid.py --windows 30 --every 3
+
+# Czy warto wybierać transakcje po opłacalności, a nie tylko po pewności modelu?
+.venv/bin/python scripts/research/ev_gate.py --windows 30
+```
+
+Każdy skrypt dzieli wynik według tego, **co robił rynek** (wzrosty / bok /
+spadki). To jest najważniejsza tabela w raporcie: strategia dodatnia tylko w
+jednym rodzaju rynku to zakład kierunkowy, nie przewaga.
+
+Raporty lądują w `models/reports/research_*.json`.
+
+**Uwaga o danych**: rok historii to za mało. Na danych 2025–2026 (sama bessa)
+wnioski wychodziły odwrotne do tych z 5,5 roku. Pobierz pełną historię:
+
+```bash
+.venv/bin/python scripts/download_data.py --days 2000
+```
+
 ## Testy
 
 ```bash
