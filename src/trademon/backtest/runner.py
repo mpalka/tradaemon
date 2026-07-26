@@ -43,7 +43,11 @@ def run_backtest(
     cfg: Config,
     symbol: str,
     funding: pd.DataFrame | None = None,
+    trade_from: int = 0,
 ) -> dict:
+    """`trade_from`: index of the first bar allowed to open a position. Bars
+    before it only feed feature computation, so a short test window can carry
+    the warmup history it needs without trading inside it."""
     if not isinstance(bundles, dict):
         bundles = {"long": bundles}
     strat, costs = cfg.strategy, cfg.costs
@@ -166,7 +170,13 @@ def run_backtest(
                 pend_active = False  # expired unfilled -> the signal is missed
 
         # 3) new signal at close of bar t: direction with the higher prob wins
-        if pos_qty == 0.0 and not pend_active and t + 1 < len(df) and atr_v[t] > 0:
+        if (
+            pos_qty == 0.0
+            and not pend_active
+            and t >= trade_from
+            and t + 1 < len(df)
+            and atr_v[t] > 0
+        ):
             sig_side = 0
             best_p = strat.prob_threshold
             if not np.isnan(p_long[t]) and p_long[t] >= best_p:
@@ -187,16 +197,17 @@ def run_backtest(
                     )
                     open_position(fill, sig_side, t + 1, atr_v[t])
 
-        equity_curve[t] = cash + margin + side * pos_qty * (close[t] - pos_entry)
+        if t >= trade_from:
+            equity_curve[t] = cash + margin + side * pos_qty * (close[t] - pos_entry)
 
     trades_df = pd.DataFrame(trades)
     equity = pd.Series(equity_curve, index=df["timestamp"]).dropna()
     result = summarize(trades_df, equity, initial, periods_per_year(cfg.exchange.timeframe))
     result["symbol"] = symbol
     result["period"] = {
-        "start": str(df["timestamp"].iloc[0]),
+        "start": str(df["timestamp"].iloc[trade_from]),
         "end": str(df["timestamp"].iloc[-1]),
-        "bars": len(df),
+        "bars": len(df) - trade_from,
     }
     # Cost-awareness: median TP distance vs the cost of a winning round trip.
     result["order_style"] = cfg.execution.order_style
