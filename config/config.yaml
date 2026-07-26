@@ -43,7 +43,14 @@ risk:
   daily_loss_limit_pct: 0.03  # kill-switch: stop opening positions after -3% day
 
 model:
-  train_window_days: 365
+  # Full downloaded history (2021-02 onward). 365 was not merely small, it was
+  # misleading: that slice is one bear regime end to end, and models fitted on
+  # it lost to a naive always-short control in all 20 TP/SL variants — a result
+  # that reverses on 5.5 years, where the model beats every naive control.
+  # Measured by scripts/research/fee_grid.py; see the README research section.
+  # Also sets the refresher's weekly download window (scripts/refresh.py), so
+  # a small value here quietly caps how much history the bot ever collects.
+  train_window_days: 2000
   validation_days: 60
   n_folds: 5
 
