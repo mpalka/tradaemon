@@ -7,7 +7,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trademon.backtest.metrics import periods_per_year, sharpe_ratio
+from trademon.backtest.metrics import (
+    avg_exposure_pct,
+    exposure_series,
+    periods_per_year,
+    return_on_risked_pct,
+    sharpe_ratio,
+    summarize,
+    time_in_market_pct,
+)
 from trademon.config import VariantConfig
 from trademon.engine.loop import Book, build_books
 from trademon.engine.state import RuntimeStore
@@ -35,6 +43,69 @@ def test_sharpe_scales_with_annualization():
     # same series, different annualization -> 1m factor is sqrt(240x) larger
     assert s_1m > s_4h
     assert s_1m / s_4h == pytest.approx(np.sqrt(525600 / 2190), rel=1e-6)
+
+
+def test_exposure_series_spans_idle_to_fully_invested():
+    equity = pd.Series([1000.0, 1000.0])
+    assert list(exposure_series(equity, pd.Series([0.0, 0.0]))) == [1.0, 1.0]
+    assert list(exposure_series(equity, pd.Series([1000.0, 1000.0]))) == [0.0, 0.0]
+    assert avg_exposure_pct(equity, pd.Series([500.0, 500.0])) == pytest.approx(50.0)
+
+
+def test_time_in_market_is_separate_from_position_size():
+    # in the market on half the bars, risking 10% when in -> 5% average exposure
+    equity = pd.Series([1000.0] * 4)
+    cash = pd.Series([1000.0, 900.0, 1000.0, 900.0])
+    assert time_in_market_pct(equity, cash) == pytest.approx(50.0)
+    assert avg_exposure_pct(equity, cash) == pytest.approx(5.0)
+
+
+def test_return_on_risked_rescales_to_the_money_actually_at_work():
+    # a 0.7% loss on an account that was only a quarter deployed is really -2.8%
+    assert return_on_risked_pct(-0.7, 25.0) == pytest.approx(-2.8)
+    assert return_on_risked_pct(-0.7, 100.0) == pytest.approx(-0.7)
+
+
+def test_return_on_risked_refuses_to_extrapolate_from_a_mostly_idle_account():
+    # 0.6% average exposure would multiply the result ~166x — that measures how
+    # rarely the book traded, not the signal. Better to say nothing.
+    assert return_on_risked_pct(-0.44, 0.6) is None
+    assert return_on_risked_pct(-0.7, 0.0) is None
+
+
+def test_summarize_reports_exposure_only_when_cash_is_known():
+    equity = pd.Series([1000.0, 990.0])
+    plain = summarize(pd.DataFrame(), equity, 1000.0)
+    assert "avg_exposure_pct" not in plain  # unchanged for callers that pass no cash
+
+    honest = summarize(pd.DataFrame(), equity, 1000.0, cash=equity * 0.75)
+    assert honest["total_return_pct"] == pytest.approx(-1.0)
+    assert honest["avg_exposure_pct"] == pytest.approx(25.0)
+    assert honest["time_in_market_pct"] == pytest.approx(100.0)
+    assert honest["return_on_risked_pct"] == pytest.approx(-4.0)
+
+
+def test_buy_hold_curve_can_match_the_bots_exposure():
+    # imported here: dashboard.app runs streamlit setup at import time
+    from trademon.dashboard.app import buy_hold_curve
+
+    df = pd.DataFrame({
+        "timestamp": ["2026-01-01T00:00:00+00:00", "2026-01-02T00:00:00+00:00"],
+        "symbol": ["BTC/USDT", "BTC/USDT"],
+        "close": [100.0, 200.0],
+        "equity": [1000.0, 1000.0],
+        "cash": [1000.0, 1000.0],
+    })
+    default = buy_hold_curve(df, 1000.0)
+    assert list(default["equity"]) == pytest.approx([1000.0, 2000.0])
+    # regression: the default must stay the all-in benchmark
+    assert list(buy_hold_curve(df, 1000.0, exposure=1.0)["equity"]) == pytest.approx(
+        list(default["equity"]))
+    # nothing in the market -> a flat line; a quarter in -> a quarter of the move
+    assert list(buy_hold_curve(df, 1000.0, exposure=0.0)["equity"]) == pytest.approx(
+        [1000.0, 1000.0])
+    assert list(buy_hold_curve(df, 1000.0, exposure=0.25)["equity"]) == pytest.approx(
+        [1000.0, 1250.0])
 
 
 def test_build_books_default_and_variants(cfg):

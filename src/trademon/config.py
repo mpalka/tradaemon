@@ -109,6 +109,10 @@ class Config(BaseModel):
     # Which A/B book the beginner dashboard shows as "Twój portfel" on the main
     # screen (the others stay in the details). None -> the first/default book.
     primary_variant: str | None = None
+    # IANA timezone the dashboard renders timestamps in. The engine stores
+    # everything in UTC and the container runs in UTC, so the dashboard converts
+    # for display. Change this if you run the bot from another timezone.
+    display_timezone: str = "Europe/Warsaw"
 
     @property
     def api_key(self) -> str | None:

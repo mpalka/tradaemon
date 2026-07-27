@@ -104,6 +104,26 @@ Bez żargonu — wszystko po polsku:
 
 **Krypto-scalper · Zarządca portfela** — zmienia ekran na drugi moduł.
 
+### Uczciwe liczby: ile pieniędzy naprawdę gra
+
+Scalper ma sufit ekspozycji (`position_pct` × `max_open_positions` = 30%), więc
+większość konta stoi w gotówce. To **nie jest wada strategii** — przy przewadze ≈ 0
+dokładanie pieniędzy zwiększyłoby stratę. Jest natomiast pułapką pomiaru, którą panel
+teraz nazywa wprost:
+
+- **„w grze: X% pieniędzy"** — ile konta naprawdę siedzi w rynku (scalper ~20–30%,
+  zarządca portfela 100%);
+- **dwie liczby obok siebie** — „wynik od wszystkich pieniędzy" vs „wynik od pieniędzy
+  w grze"; ta druga jest ok. 4× ostrzejsza i uczciwiej ocenia sam sygnał;
+- **dwie linie odniesienia** na wykresie — „wszystko w rynku" (jasna) i „tyle w rynku
+  co bot" (ciemna). Ta ciemna to sprawiedliwa poprzeczka: porównanie z kimś, kto włożył
+  wszystko, chwali bota za samą **nieobecność** w spadkach.
+
+Przelicznik jest przybliżeniem (zakłada liniowe skalowanie) i **celowo się nie
+pokazuje**, gdy bot był w rynku bardzo rzadko — w backteście per para pozycja jest
+otwarta na ~6–11% świec, więc średnia ekspozycja ~0,6% mnożyłaby wynik ×166. Raport
+podaje wtedy same fakty: średnią ekspozycję i czas w rynku.
+
 ## Utrzymanie (automatyczne — Moduł 1)
 
 Serwis `refresher` co tydzień:

@@ -1,10 +1,14 @@
 """Tests for the beginner-dashboard translation layer (dashboard/humanize.py)."""
 
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from trademon.dashboard import humanize
+
+WARSAW = ZoneInfo("Europe/Warsaw")
+H4_MS = 4 * 3_600_000
 
 
 def test_reason_and_exit_maps():
@@ -73,3 +77,30 @@ def test_bot_status_fresh_and_stale():
 
 def test_bot_status_empty():
     assert not humanize.bot_status({}, 1000, datetime.now(UTC))["ok"]
+
+
+def test_bot_status_healthy_mid_window_stays_green():
+    # A 4h candle opened 04:00 closes 08:00. Just before the next close (12:00)
+    # its open time is ~8h old — but the bot is healthy and must read 🟢.
+    lct = {"BTC/USDT": "2026-07-27T04:00:00+00:00"}
+    just_closed = humanize.bot_status(lct, H4_MS, datetime(2026, 7, 27, 8, 32, tzinfo=UTC))
+    near_next = humanize.bot_status(lct, H4_MS, datetime(2026, 7, 27, 11, 45, tzinfo=UTC))
+    assert just_closed["ok"] and near_next["ok"]
+
+
+def test_bot_status_reports_close_and_next_candle_local():
+    lct = {"BTC/USDT": "2026-07-27T04:00:00+00:00"}
+    s = humanize.bot_status(lct, H4_MS, datetime(2026, 7, 27, 8, 32, tzinfo=UTC), WARSAW)
+    # closed 08:00 UTC -> 10:00 Warsaw; next due 12:00 UTC -> 14:00 Warsaw
+    assert "10:00" in s["text"] and "14:00" in s["text"]
+
+
+def test_bot_status_truly_stale_is_red():
+    lct = {"BTC/USDT": "2026-07-27T04:00:00+00:00"}
+    s = humanize.bot_status(lct, H4_MS, datetime(2026, 7, 28, 0, 0, tzinfo=UTC))
+    assert not s["ok"] and s["emoji"] == "🔴"
+
+
+def test_event_line_local_timezone():
+    rec = {"kind": "trade_open", "timestamp": "2026-07-25T14:00:00+00:00", "message": "x"}
+    assert humanize.event_line(rec, WARSAW)["time"] == "25.07 16:00"

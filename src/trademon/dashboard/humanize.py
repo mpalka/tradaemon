@@ -7,7 +7,7 @@ views so the wording stays consistent. Pure functions — no Streamlit here.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, tzinfo
 
 GOOD, BAD, MUTED = "#0ca30c", "#d03b3b", "#999999"
 
@@ -58,6 +58,20 @@ GLOSSARY = {
     "Zmienność": "Jak mocno wartość skacze w górę i w dół. Niżej = spokojniej.",
     "Kill-switch": "Bezpiecznik: po zbyt dużej stracie w ciągu dnia bot przestaje "
                    "otwierać nowe pozycje.",
+    "Pieniądze w grze": "Jaka część konta naprawdę siedzi w rynku. Reszta czeka w gotówce "
+                        "i nic nie robi — ani nie zarabia, ani nie traci.",
+    "wynik_calosc": "Wynik policzony od wszystkich pieniędzy — także tych, które leżały "
+                    "bezczynnie. Dlatego wygląda łagodniej, niż zasługuje sam pomysł bota.",
+    "Czas w rynku": "Jak często bot w ogóle miał otwartą pozycję. Niski wynik znaczy, "
+                    "że przez większość czasu tylko czekał.",
+    "wynik_w_grze": "Ten sam wynik, ale policzony tylko od pieniędzy, które faktycznie grały. "
+                    "To uczciwsza ocena samego pomysłu: gdyby bot grał całym kontem, "
+                    "wyszłoby mniej więcej tyle. Przybliżenie, nie wyrocznia — a gdy bot "
+                    "był w rynku bardzo rzadko, pokazujemy „—”, bo przeliczanie takiej "
+                    "resztki na całe konto to już zgadywanie.",
+    "Tyle w rynku co bot": "Ktoś, kto włożył w rynek tyle samo pieniędzy co bot i po prostu "
+                           "czekał. To sprawiedliwa poprzeczka — porównanie z kimś, kto "
+                           "włożył wszystko, chwali bota za samą nieobecność w spadkach.",
 }
 
 
@@ -75,13 +89,17 @@ def signed_money(x: float) -> str:
     return f"{x:+,.2f} $"
 
 
-def _fmt_time(ts: str | None) -> str:
+def _fmt_time(ts: str | datetime | None, tz: tzinfo | None = None) -> str:
+    """Format a UTC timestamp as 'DD.MM HH:MM'. With `tz`, convert to that zone
+    first so the wall-clock shown matches the viewer's local time."""
     if not ts:
         return "?"
     try:
-        dt = datetime.fromisoformat(ts)
+        dt = ts if isinstance(ts, datetime) else datetime.fromisoformat(ts)
+        if tz is not None and dt.tzinfo is not None:
+            dt = dt.astimezone(tz)
         return dt.strftime("%d.%m %H:%M")
-    except ValueError:
+    except (ValueError, TypeError):
         return str(ts)[:16].replace("T", " ")
 
 
@@ -124,7 +142,7 @@ def holding_card(symbol: str, value: float, weight: float, target: float) -> dic
     }
 
 
-def event_line(record: dict) -> dict:
+def event_line(record: dict, tz: tzinfo | None = None) -> dict:
     """Turn one alert/trade record into {emoji, time, text} for the timeline."""
     kind = record.get("kind", "")
     emoji = ALERT_EMOJI.get(kind, "•")
@@ -136,20 +154,35 @@ def event_line(record: dict) -> dict:
             text = f"{record.get('symbol', '')} zamknięte {EXIT_PL.get(record['exit_reason'], '')}"
         else:
             text = kind or "zdarzenie"
-    return {"emoji": emoji, "time": _fmt_time(record.get("timestamp")), "text": text}
+    return {"emoji": emoji, "time": _fmt_time(record.get("timestamp"), tz), "text": text}
 
 
-def bot_status(last_candle_ts: dict, timeframe_ms: int, now: datetime) -> dict:
-    """🟢/🔴 status line from the freshest heartbeat across pairs."""
+def bot_status(last_candle_ts: dict, timeframe_ms: int, now: datetime,
+               tz: tzinfo | None = None) -> dict:
+    """🟢/🔴 status line from the freshest heartbeat across pairs.
+
+    `last_candle_ts` holds each pair's last *closed* candle by its OPEN time, so
+    that candle only finalized `timeframe_ms` later — on 4h bars its open time
+    naturally sits 4–8h behind the wall clock even when the bot is perfectly
+    healthy. We reason about the candle's CLOSE time (open + timeframe) so the
+    number matches intuition, and flag trouble only once a whole extra candle is
+    overdue.
+    """
     if not last_candle_ts:
         return {"ok": False, "emoji": "🔴", "text": "bot jeszcze nie odczytał rynku"}
-    latest = max(last_candle_ts.values())
     try:
-        age_ms = (now - datetime.fromisoformat(latest)).total_seconds() * 1000
+        latest_open = datetime.fromisoformat(max(last_candle_ts.values()))
     except ValueError:
         return {"ok": False, "emoji": "🔴", "text": "nieznany czas ostatniego odczytu"}
-    fresh = age_ms <= timeframe_ms * 1.5 + 15 * 60_000
-    when = _fmt_time(latest)
+    bar = timedelta(milliseconds=timeframe_ms)
+    closed_at = latest_open + bar          # when that candle actually finalized
+    next_at = closed_at + bar              # when the next one is due
+    overdue_ms = (now - closed_at).total_seconds() * 1000
+    fresh = overdue_ms <= timeframe_ms + 15 * 60_000  # healthy until a full bar is missed
+    when = _fmt_time(closed_at, tz)
     if fresh:
-        return {"ok": True, "emoji": "🟢", "text": f"działa — ostatni odczyt rynku {when}"}
-    return {"ok": False, "emoji": "🔴", "text": f"nie odpowiada — ostatni odczyt {when}"}
+        return {"ok": True, "emoji": "🟢",
+                "text": f"działa — ostatnia świeca zamknięta {when}, "
+                        f"następna około {_fmt_time(next_at, tz)}"}
+    return {"ok": False, "emoji": "🔴",
+            "text": f"może nie odpowiadać — ostatnia świeca zamknięta {when}"}

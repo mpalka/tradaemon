@@ -115,8 +115,12 @@ def _render_beginner(pcfg: PortfolioConfig, state: dict, equity_df: pd.DataFrame
     top = st.columns([2, 3])
     with top[0]:
         st.metric("Ile masz (wirtualne $)", humanize.money2(eq), f"{change:+.2f}% od startu")
-        st.caption(f"💵 gotówka: {humanize.money2(cash)} · 📊 w aktywach: "
-                   f"{humanize.money2(invested)}  ·  tryb **paper** (ćwiczebny)")
+        # Unlike the scalper, this module is in the market with everything it has —
+        # so its result and its "kup i trzymaj" benchmark compare like with like.
+        at_work = (invested / eq * 100.0) if eq else 0.0
+        st.caption(f"💵 gotówka: {humanize.money2(cash)} · 📊 w grze: "
+                   f"{humanize.money2(invested)} (**{at_work:.0f}% pieniędzy**)  ·  "
+                   f"tryb **paper** (ćwiczebny)")
     with top[1]:
         stt = _status(state)
         st.markdown(f"### {stt['emoji']} Status bota")
@@ -136,7 +140,9 @@ def _render_beginner(pcfg: PortfolioConfig, state: dict, equity_df: pd.DataFrame
             scale = strat["equity"].iloc[0] / bench["equity"].iloc[0]
             bench = bench.assign(equity=bench["equity"] * scale)
         st.altair_chart(_chart(strat, bench), use_container_width=True)
-        st.caption("Niebieska nad szarą = rebalansowanie pomaga vs zwykłe trzymanie koszyka.")
+        st.caption("Niebieska nad szarą = rebalansowanie pomaga vs zwykłe trzymanie koszyka. "
+                   "Tu porównanie jest uczciwe z natury: obie linie mają w rynku "
+                   "wszystkie pieniądze.")
     else:
         st.info("Za mało danych na wykres — bot dopiero zaczyna.")
 

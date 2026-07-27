@@ -11,12 +11,20 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import altair as alt
 import pandas as pd
 import streamlit as st
 
-from trademon.backtest.metrics import max_drawdown, periods_per_year, sharpe_ratio
+from trademon.backtest.metrics import (
+    avg_exposure_pct,
+    max_drawdown,
+    periods_per_year,
+    return_on_risked_pct,
+    sharpe_ratio,
+    time_in_market_pct,
+)
 from trademon.config import load_config
 from trademon.dashboard import humanize
 from trademon.data.storage import TIMEFRAME_MS
@@ -26,8 +34,34 @@ st.set_page_config(page_title="TraDaemon", page_icon="👹💰", layout="wide")
 
 cfg = load_config()
 runtime = cfg.paths.runtime_dir
-ACCENT, BH_COLOR, GOOD, BAD = "#2a78d6", "#999999", "#0ca30c", "#d03b3b"
+ACCENT, BH_COLOR, GOOD, BAD = "#2a78d6", "#c2c2c2", "#0ca30c", "#d03b3b"
+BH_FAIR_COLOR = "#5a5a5a"   # the like-for-like benchmark, so it reads stronger than the all-in one
 RANGES = {"7 dni": 7, "30 dni": 30, "Całość": None}
+
+# Chart series labels. The bot plays with only a part of the account, so the all-in
+# "buy & hold" is not a fair yardstick — both are drawn, the fair one more prominent.
+# Keep these short and differing from the first word: the legend truncates, and two
+# labels both starting "Kup i trzymaj…" render identically.
+S_BOT = "Twój portfel"
+S_BH_ALL = "Wszystko w rynku"
+S_BH_FAIR = "Tyle w rynku co bot"
+
+# The engine stores UTC and the container runs in UTC; render in the viewer's zone.
+try:
+    DISPLAY_TZ: ZoneInfo | None = ZoneInfo(cfg.display_timezone)
+except ZoneInfoNotFoundError:
+    DISPLAY_TZ = None
+
+
+def to_local(ts):
+    """UTC/ISO timestamps -> local wall-clock (tz-naive), so Altair renders the
+    same local time regardless of the browser's own timezone."""
+    out = pd.to_datetime(ts, utc=True)
+    if DISPLAY_TZ is None:
+        return out.dt.tz_localize(None) if hasattr(out, "dt") else out.tz_localize(None)
+    if hasattr(out, "dt"):
+        return out.dt.tz_convert(DISPLAY_TZ).dt.tz_localize(None)
+    return out.tz_convert(DISPLAY_TZ).tz_localize(None)
 
 
 # ---------- data access ----------
@@ -73,9 +107,31 @@ def book_equity_series(equity_df: pd.DataFrame) -> pd.DataFrame:
     return df.groupby("timestamp", as_index=False)["equity"].last()
 
 
-def buy_hold_curve(equity_df: pd.DataFrame, initial: float) -> pd.DataFrame:
+def book_exposure_series(equity_df: pd.DataFrame) -> pd.DataFrame:
+    """Equity and free cash per timestamp — how much of the account was in the market."""
+    if equity_df.empty or "cash" not in equity_df:
+        return pd.DataFrame(columns=["timestamp", "equity", "cash"])
+    df = equity_df.copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    return df.groupby("timestamp", as_index=False)[["equity", "cash"]].last()
+
+
+def money_at_work_pct(equity_df: pd.DataFrame) -> float:
+    """Average share of the account that was actually in the market, in percent."""
+    ex = book_exposure_series(equity_df)
+    return avg_exposure_pct(ex["equity"], ex["cash"]) if len(ex) else 0.0
+
+
+def buy_hold_curve(equity_df: pd.DataFrame, initial: float,
+                   exposure: float = 1.0) -> pd.DataFrame:
     """Equal-weight buy&hold of all pairs from per-bar close prices logged
-    alongside equity — the benchmark the strategy must beat."""
+    alongside equity — the benchmark the strategy must beat.
+
+    `exposure` is the share of the account put in the market (the rest sits in cash
+    earning nothing). The default 1.0 is the all-in benchmark; passing the bot's own
+    average exposure compares like with like — otherwise the bot "wins" every
+    downturn simply by not having been there.
+    """
     if equity_df.empty or "close" not in equity_df:
         return pd.DataFrame()
     df = equity_df.copy()
@@ -83,7 +139,8 @@ def buy_hold_curve(equity_df: pd.DataFrame, initial: float) -> pd.DataFrame:
     wide = df.pivot_table(index="timestamp", columns="symbol", values="close").ffill()
     if wide.empty:
         return pd.DataFrame()
-    bh = initial * wide.div(wide.iloc[0]).mean(axis=1)
+    ratio = wide.div(wide.iloc[0]).mean(axis=1)
+    bh = initial * ((1.0 - exposure) + exposure * ratio)
     return pd.DataFrame({"timestamp": bh.index, "equity": bh.values})
 
 
@@ -101,6 +158,12 @@ def live_metrics(equity_df: pd.DataFrame, trades: pd.DataFrame, timeframe: str) 
         s = eq.set_index("timestamp")["equity"]
         m["sharpe"] = sharpe_ratio(s, periods_per_year(timeframe))
         m["max_dd"] = max_drawdown(s) * 100.0
+        # Return above is measured on the whole account; most of it never traded.
+        ex = book_exposure_series(equity_df)
+        m["at_work"] = avg_exposure_pct(ex["equity"], ex["cash"]) if len(ex) else 0.0
+        m["in_market"] = time_in_market_pct(ex["equity"], ex["cash"]) if len(ex) else 0.0
+        total_return = (s.iloc[-1] / s.iloc[0] - 1.0) * 100.0
+        m["return_on_risked"] = return_on_risked_pct(total_return, m["at_work"])
     if len(trades):
         pnl = trades["pnl"]
         wins, losses = pnl[pnl > 0], pnl[pnl <= 0]
@@ -113,18 +176,26 @@ def live_metrics(equity_df: pd.DataFrame, trades: pd.DataFrame, timeframe: str) 
     return m
 
 
-def equity_chart(strat: pd.DataFrame, bh: pd.DataFrame) -> alt.Chart:
-    layers = [strat.assign(seria="Twój portfel")[["timestamp", "equity", "seria"]]]
+def equity_chart(strat: pd.DataFrame, bh: pd.DataFrame,
+                 bh_fair: pd.DataFrame | None = None) -> alt.Chart:
+    layers = [strat.assign(seria=S_BOT)[["timestamp", "equity", "seria"]]]
     if len(bh):
-        layers.append(bh.assign(seria="Kup i trzymaj")[["timestamp", "equity", "seria"]])
+        layers.append(bh.assign(seria=S_BH_ALL)[["timestamp", "equity", "seria"]])
+    if bh_fair is not None and len(bh_fair):
+        layers.append(bh_fair.assign(seria=S_BH_FAIR)[["timestamp", "equity", "seria"]])
     data = pd.concat(layers, ignore_index=True)
+    data["timestamp"] = to_local(data["timestamp"])
     return (
         alt.Chart(data).mark_line().encode(
-            x=alt.X("timestamp:T", title=None, axis=alt.Axis(format="%d.%m", grid=False)),
+            x=alt.X("timestamp:T", title=None,
+                    axis=alt.Axis(format="%d.%m %H:%M", grid=False)),
             y=alt.Y("equity:Q", title="Wartość ($)", scale=alt.Scale(zero=False, nice=False)),
             color=alt.Color("seria:N", title=None,
-                            scale=alt.Scale(domain=["Twój portfel", "Kup i trzymaj"],
-                                            range=[ACCENT, BH_COLOR])),
+                            scale=alt.Scale(domain=[S_BOT, S_BH_ALL, S_BH_FAIR],
+                                            range=[ACCENT, BH_COLOR, BH_FAIR_COLOR])),
+            tooltip=[alt.Tooltip("timestamp:T", title="Czas", format="%d.%m.%Y %H:%M"),
+                     alt.Tooltip("equity:Q", title="Wartość ($)", format=",.2f"),
+                     alt.Tooltip("seria:N", title="Seria")],
         ).properties(height=300)
     )
 
@@ -143,13 +214,15 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
     top = st.columns([2, 3])
     with top[0]:
         st.metric("Ile masz (wirtualne $)", humanize.money2(eq), f"{change:+.2f}% od startu")
-        st.caption(f"💵 wolne: {humanize.money2(cash)} · 📈 w pozycjach: "
-                   f"{humanize.money2(invested)}  ·  tryb **paper** (ćwiczebny, nie prawdziwe pieniądze)")
+        now_at_work = (invested / eq * 100.0) if eq else 0.0
+        st.caption(f"💵 wolne: {humanize.money2(cash)} · 📈 w grze: "
+                   f"{humanize.money2(invested)} (**{now_at_work:.0f}% pieniędzy**)  ·  "
+                   f"tryb **paper** (ćwiczebny, nie prawdziwe pieniądze)")
     # 2) status bota
     with top[1]:
         tf = state.get("timeframe", cfg.exchange.timeframe)
         status = humanize.bot_status(state.get("last_candle_ts", {}),
-                                     TIMEFRAME_MS.get(tf, 0), datetime.now(UTC))
+                                     TIMEFRAME_MS.get(tf, 0), datetime.now(UTC), DISPLAY_TZ)
         st.markdown(f"### {status['emoji']} Status bota")
         st.markdown(status["text"])
         if state.get("kill_switch"):
@@ -163,12 +236,31 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
     win = window_df(equity_df, RANGES[rng_label])
     strat_eq = book_equity_series(win)
     if len(strat_eq):
+        at_work = money_at_work_pct(win)
+        scale = strat_eq["equity"].iloc[0] / initial  # rebase to the window start
         bh = buy_hold_curve(win, initial)
-        if len(bh):  # rebase benchmark to the strategy's value at the window start
-            scale = strat_eq["equity"].iloc[0] / initial
+        bh_fair = buy_hold_curve(win, initial, exposure=at_work / 100.0)
+        if len(bh):
             bh = bh.assign(equity=bh["equity"] * scale)
-        st.altair_chart(equity_chart(strat_eq, bh), use_container_width=True)
-        st.caption("Niebieska linia nad szarą = bot radzi sobie lepiej niż zwykłe trzymanie.")
+        if len(bh_fair):
+            bh_fair = bh_fair.assign(equity=bh_fair["equity"] * scale)
+        st.altair_chart(equity_chart(strat_eq, bh, bh_fair), use_container_width=True)
+        st.caption(
+            f"Obie szare linie to „kup i trzymaj\", czyli kupić raz i czekać. Bot trzymał "
+            f"w rynku średnio **{at_work:.0f}% pieniędzy**, więc uczciwe porównanie to "
+            f"**ciemna** linia — ktoś, kto włożył tyle samo co on. Jasną linię (wszystkie "
+            f"pieniądze w rynku) bot łatwo bije w spadkach, ale nie dlatego, że jest mądry "
+            f"— po prostu go tam nie było."
+        )
+        # The same result counted two ways: idle cash makes the first number look gentler.
+        win_return = (strat_eq["equity"].iloc[-1] / strat_eq["equity"].iloc[0] - 1.0) * 100.0
+        risked = return_on_risked_pct(win_return, at_work)
+        c1, c2 = st.columns(2)
+        c1.metric("Wynik od wszystkich pieniędzy", f"{win_return:+.2f}%",
+                  help=humanize.GLOSSARY["wynik_calosc"])
+        c2.metric("Wynik od pieniędzy w grze",
+                  f"{risked:+.2f}%" if risked is not None else "—",
+                  help=humanize.GLOSSARY["wynik_w_grze"])
     else:
         st.info("Za mało danych na wykres — bot dopiero zaczyna zbierać historię.")
 
@@ -196,7 +288,7 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
     if len(alerts):
         rows = alerts.sort_values("timestamp", ascending=False).head(15).to_dict("records")
         for rec in rows:
-            e = humanize.event_line(rec)
+            e = humanize.event_line(rec, DISPLAY_TZ)
             st.markdown(f"{e['emoji']} &nbsp;`{e['time']}` &nbsp; {e['text']}")
     else:
         st.caption("Jeszcze nic się nie wydarzyło.")
@@ -215,6 +307,15 @@ def tab_metrics(equity_df: pd.DataFrame, trades: pd.DataFrame, state: dict) -> N
                 help=humanize.GLOSSARY["Profit factor"])
     c[3].metric("Win rate", f"{m['win_rate']:.0f}%" if "win_rate" in m else "—",
                 help=humanize.GLOSSARY["Win rate"])
+    c2 = st.columns(4)
+    c2[0].metric("Pieniądze w grze", f"{m.get('at_work', 0):.0f}%",
+                 help=humanize.GLOSSARY["Pieniądze w grze"])
+    c2[1].metric("Czas w rynku", f"{m.get('in_market', 0):.0f}%",
+                 help=humanize.GLOSSARY["Czas w rynku"])
+    risked = m.get("return_on_risked")
+    c2[2].metric("Wynik od pieniędzy w grze",
+                 f"{risked:+.2f}%" if risked is not None else "—",
+                 help=humanize.GLOSSARY["wynik_w_grze"])
 
 
 def tab_analytics(trades: pd.DataFrame) -> None:
@@ -290,6 +391,7 @@ def tab_variants(books: dict[str, Path]) -> None:
         metric_rows.append({
             "Wariant": name, "Kapitał": state.get("equity", initial),
             "Sharpe": m.get("sharpe"), "Max DD %": m.get("max_dd"),
+            "W grze %": m.get("at_work"), "Wynik od tego %": m.get("return_on_risked"),
             "Win rate %": m.get("win_rate"), "Transakcje": len(trades),
         })
     if curves:
@@ -302,6 +404,7 @@ def tab_variants(books: dict[str, Path]) -> None:
         st.altair_chart(chart, use_container_width=True)
     st.dataframe(pd.DataFrame(metric_rows).style.format(
         {"Kapitał": "{:,.2f}", "Sharpe": "{:.2f}", "Max DD %": "{:.2f}",
+         "W grze %": "{:.0f}", "Wynik od tego %": "{:+.2f}",
          "Win rate %": "{:.0f}"}, na_rep="—"), use_container_width=True, hide_index=True)
 
 
@@ -330,8 +433,10 @@ def tab_health(books: dict[str, Path]) -> None:
         bar_ms = TIMEFRAME_MS.get(tf, 0)
         stale = []
         for sym, ts in state.get("last_candle_ts", {}).items():
-            age_ms = (now - datetime.fromisoformat(ts)).total_seconds() * 1000
-            if age_ms > bar_ms * 1.5 + 15 * 60_000:
+            # ts is the last closed candle's OPEN time; it finalized bar_ms later.
+            # Overdue only once a whole extra bar past that close has elapsed.
+            overdue_ms = (now - datetime.fromisoformat(ts)).total_seconds() * 1000 - bar_ms
+            if overdue_ms > bar_ms + 15 * 60_000:
                 stale.append(sym)
         cols = st.columns(4)
         cols[0].metric(f"Wariant: {name}", "OK" if not stale else "UWAGA")
@@ -339,8 +444,7 @@ def tab_health(books: dict[str, Path]) -> None:
                        help=humanize.GLOSSARY["Kill-switch"])
         cols[2].metric("Drawdown", f"{state.get('drawdown_pct', 0):.2f}%",
                        help=humanize.GLOSSARY["Max drawdown"])
-        cols[3].metric("Ostatni stan",
-                       str(state.get("updated_at", "?"))[:19].replace("T", " "))
+        cols[3].metric("Ostatni stan", humanize._fmt_time(state.get("updated_at"), DISPLAY_TZ))
         if stale:
             st.warning(f"[{name}] przeterminowane dane dla: {', '.join(stale)} "
                        f"(silnik może nie przetwarzać świec)")

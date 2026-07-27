@@ -76,6 +76,7 @@ def run_backtest(
     cash = initial
     trades: list[dict] = []
     equity_curve = np.full(len(df), np.nan)
+    cash_curve = np.full(len(df), np.nan)   # free cash per bar -> how much was idle
     n_signals = n_fills = 0
 
     pos_qty = 0.0          # > 0 means a position is open (size is always positive)
@@ -199,10 +200,13 @@ def run_backtest(
 
         if t >= trade_from:
             equity_curve[t] = cash + margin + side * pos_qty * (close[t] - pos_entry)
+            cash_curve[t] = cash
 
     trades_df = pd.DataFrame(trades)
     equity = pd.Series(equity_curve, index=df["timestamp"]).dropna()
-    result = summarize(trades_df, equity, initial, periods_per_year(cfg.exchange.timeframe))
+    cash_series = pd.Series(cash_curve, index=df["timestamp"]).dropna()
+    result = summarize(trades_df, equity, initial, periods_per_year(cfg.exchange.timeframe),
+                       cash=cash_series)
     result["symbol"] = symbol
     result["period"] = {
         "start": str(df["timestamp"].iloc[trade_from]),
@@ -229,6 +233,15 @@ def run_backtest(
     return {"summary": result, "trades": trades_df, "equity": equity}
 
 
+def _risked_suffix(s: dict) -> str:
+    """Return rescaled to the money at work — omitted when the book traded so rarely
+    that the rescale would extrapolate rather than inform."""
+    risked = s.get("return_on_risked_pct")
+    if risked is None:
+        return " (too rarely in the market to rescale the return)"
+    return f" -> return on money actually risked: {risked:+.2f}%"
+
+
 def render_report(results: list[dict], cfg: Config) -> str:
     """Plain-text report; also states the go/no-go verdict after costs."""
     lines = ["=" * 64, "TRADEMON BACKTEST REPORT", "=" * 64]
@@ -245,6 +258,13 @@ def render_report(results: list[dict], cfg: Config) -> str:
                 f"(fees paid: {s.get('fees_paid', 0):.2f})"
             ),
             f"  sharpe: {s['sharpe']:.2f}, max drawdown: {s['max_drawdown_pct']:.2f}%",
+            # The numbers above are measured on the whole account, most of which
+            # never traded — so state how much of it was actually at work.
+            (
+                f"  capital at work: {s.get('avg_exposure_pct', 0):.1f}% on average, "
+                f"in the market on {s.get('time_in_market_pct', 0):.0f}% of bars"
+                + _risked_suffix(s)
+            ),
             f"  exits: {s.get('exits', {})}",
             (
                 f"  order style: {s.get('order_style', 'taker')}, "
@@ -295,16 +315,21 @@ def render_html_report(results: list[dict], cfg: Config) -> str:
     }
 
     def cells(s: dict) -> str:
+        risked = s.get("return_on_risked_pct")
         return "".join(f"<td>{c}</td>" for c in [
             s["symbol"], s["n_trades"], f"{s.get('win_rate_pct', 0):.0f}%",
             f"{s.get('profit_factor', 0):.2f}", f"{s['total_return_pct']:+.2f}%",
+            f"{s.get('avg_exposure_pct', 0):.1f}%",
+            f"{s.get('time_in_market_pct', 0):.0f}%",
+            f"{risked:+.2f}%" if risked is not None else "—",
             f"{s['sharpe']:.2f}", f"{s['max_drawdown_pct']:.2f}%",
             f"{s.get('fees_paid', 0):.2f}",
         ])
 
     header = "".join(f"<th>{h}</th>" for h in
                      ["Para", "Transakcje", "Win rate", "Profit factor",
-                      "Wynik netto", "Sharpe", "Max DD", "Prowizje"])
+                      "Wynik netto", "W grze (śr.)", "Czas w rynku", "Wynik od tego",
+                      "Sharpe", "Max DD", "Prowizje"])
     body = "".join(f"<tr>{cells(r['summary'])}</tr>" for r in results)
     net = [r["summary"]["total_return_pct"] for r in results]
     positive = all(x > 0 for x in net)
