@@ -1,0 +1,42 @@
+# Module 3: cross-sectional ranking study (research only, no live book).
+#
+# Hypothesis: relative strength between assets carries more signal than absolute
+# direction. Buy the leaders, optionally sell the laggards, re-rank periodically.
+# Scored on several disjoint windows, because a single number is how this project
+# already fooled itself three times.
+
+signal:
+  # 120-day momentum, ignoring the last 5 days. The skip matters: the freshest move
+  # tends to mean-revert, so counting it blends a reversal signal into a momentum one.
+  lookback_days: 120
+  skip_days: 5
+
+rank:
+  n_long: 5           # hold the 5 strongest
+  n_short: 5          # sell the 5 weakest (long_short variant only)
+  rebalance_days: 20  # re-rank roughly monthly
+
+# Both markets run through identical code — that is the point of the study. If an
+# edge shows up in one market but not the other, it is a property of that market,
+# not of the method.
+markets:
+  - name: crypto
+    bars_per_year: 365   # crypto trades every day
+    symbols: [BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT, XRP/USDT, DOGE/USDT,
+              ADA/USDT, LINK/USDT, AVAX/USDT, LTC/USDT, DOT/USDT, TRX/USDT,
+              ATOM/USDT, UNI/USDT, ETC/USDT, XLM/USDT, BCH/USDT, FIL/USDT,
+              NEAR/USDT, APT/USDT, ARB/USDT, OP/USDT, INJ/USDT, SUI/USDT,
+              AAVE/USDT]
+  - name: etf
+    bars_per_year: 252   # ~252 trading days
+    symbols: [XLK, XLF, XLE, XLV, XLI, XLP, XLY, XLU, XLB, XLRE,
+              SPY, QQQ, IWM, EFA, EEM, EWJ, EWG, EWU, FXI, EWZ,
+              TLT, IEF, LQD, HYG, GLD, SLV, DBC, VNQ, TIP]
+
+costs:
+  taker_fee: 0.001     # same assumptions as the other two modules
+  maker_fee: 0.001
+  slippage_bps: 2.0
+
+initial_capital: 10000.0
+n_windows: 4

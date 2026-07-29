@@ -12,6 +12,11 @@ Narzędzie edukacyjne: **dwa równoległe moduły** do zabawy algorytmem i dyscy
    z opcjonalnym filtrem trendu. Backtest na 10 latach pokazuje, że rebalansowanie
    przycina zwycięzców w hossie — jego wartość to dyscyplina i redukcja ryzyka, nie alpha.
 
+3. **Moduł 3 — Ranking przekrojowy** (badanie, bez księgi na żywo)
+   Kupuj najsilniejsze aktywa, sprzedawaj najsłabsze — zakład na różnicę między
+   aktywami, nie na kierunek rynku. Ten sam kod na krypto i ETF-ach, oceniany na
+   rozłącznych oknach. Wynik: wciąż nieodróżnialny od szumu, ale najbliżej.
+
 > **Ostrzeżenie**: Oba moduły to **paper trading** (wirtualne środki).
 > Decyzja o realnych środkach, gitHub kluczach API czy live tradingu to Twoja
 > osobna, świadoma decyzja. To nie jest porada inwestycyjna.
@@ -203,6 +208,49 @@ Dashboard automatycznie odkrywa księgi z `runtime/portfolio/*/state.json` i pok
 - Dziennik rebalansów (ikony + opisy zdarzeń)
 - Panel zdrowia (świeżość danych, ostatni rebalans)
 
+
+## Moduł 3: Ranking przekrojowy (badanie, bez księgi na żywo)
+
+Zamiast „czy BTC wzrośnie" (hipoteza Modułu 1, zmierzona na ≈ zero) pyta: **które
+aktywa są najsilniejsze względem pozostałych?** Kupuje liderów, opcjonalnie sprzedaje
+maruderów, przeranguje co ~20 dni. Zakład dotyczy **różnicy między aktywami**, nie
+kierunku rynku.
+
+```bash
+python scripts/crosssec_backtest.py --refresh        # pobierz dane i policz macierz
+python scripts/crosssec_backtest.py --market etf     # jeden rynek
+python scripts/crosssec_backtest.py --lookback 250 --rebalance 60
+```
+
+Ten sam kod chodzi na **25 parach krypto i 29 ETF-ach**, w dwóch wariantach
+(tylko long / long-short), na **4 rozłącznych oknach** — bo trzy razy w tym projekcie
+„najlepszy" wynik z jednego okna okazał się szumem. Raport pokazuje **wszystkie okna**
+i nie wybiera zwycięzcy.
+
+### Wynik (2026-07): nadal zero, ale ciekawiej
+
+| Rynek | Wariant | Wynik | Poprzeczka | Odchyleń od zera |
+|---|---|---|---|---|
+| krypto | long-short | **+66,3%** | gotówka | +1,11 — nieodróżnialne |
+| krypto | tylko long | −9,6% | koszyk (−20,2%) | +0,80 — nieodróżnialne |
+| ETF | tylko long | +57,7% | koszyk (+128,1%) | +1,08 — nieodróżnialne |
+| ETF | long-short | −28,5% | gotówka | −1,04 — nieodróżnialne |
+
+Krypto long-short jest dodatnie w **3 z 4 okien** i +66% przez 5,5 roku przy
+ekspozycji netto 0,4% (realnie neutralne rynkowo) — najciekawszy wynik w tym
+projekcie. **Ale 1,11 odchylenia od zera to nie jest przewaga** — potrzeba ~2. Do tego
+ETF-y, gdzie momentum przekrojowe jest najlepiej udokumentowane, są **spójnie ujemne
+w 4 z 4 okien**. Gdyby efekt był własnością metody, pokazałby się na obu rynkach.
+
+**Poprzeczka zależy od ekspozycji** (ta sama lekcja co w Module 1): long-only mierzy
+się z koszykiem kup&trzymaj, long-short z **gotówką** — porównywanie książki neutralnej
+rynkowo z w pełni długim koszykiem zawyżałoby ją w każdym spadku.
+
+> **Główne zastrzeżenie: błąd przetrwania.** 25 par krypto to te, które **dotrwały** do
+> dziś i są dziś płynne. Brak LUNA, FTT i innych, które umarły — a to zaburza wynik
+> w nieznanym kierunku. Dodatkowo long-short na krypto wymaga kontraktów wieczystych
+> (nie spot), a **koszt funding nie jest w ogóle modelowany**. Traktować jako pomiar
+> hipotezy, nie jako strategię.
 
 ## Tryb live (Moduł 1 — świadoma decyzja)
 
