@@ -144,6 +144,32 @@ def buy_hold_curve(equity_df: pd.DataFrame, initial: float,
     return pd.DataFrame({"timestamp": bh.index, "equity": bh.values})
 
 
+def with_live_point(equity_df: pd.DataFrame, state: dict) -> pd.DataFrame:
+    """Append a synthetic 'now' row (per pair) from state.json so the curves reach
+    the current mark-to-market equity — the same number shown in 'Ile masz' — and
+    move on every refresh, instead of stepping only when a 4h candle closes. The
+    engine journals equity at candle close; the ticker keeps state.json's equity
+    and last_close current between closes, which is what this fills in."""
+    ua, eq = state.get("updated_at"), state.get("equity")
+    if not ua or eq is None or equity_df.empty or "timestamp" not in equity_df:
+        return equity_df
+    ts = pd.to_datetime(ua, utc=True)
+    if ts <= pd.to_datetime(equity_df["timestamp"], utc=True).max():
+        return equity_df  # a candle already closed at/after 'now'; no gap to fill
+    # Match the journal's second-resolution ISO exactly — a stray microsecond field
+    # would break the strict format pandas infers over the otherwise-uniform column.
+    now_iso = ts.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    last_close = state.get("last_close", {})
+    cash = float(state.get("cash", eq))
+    hist_syms = list(equity_df["symbol"].unique()) if "symbol" in equity_df else []
+    rows = [{"timestamp": now_iso, "symbol": s, "close": last_close[s],
+             "equity": float(eq), "cash": cash}
+            for s in hist_syms if s in last_close]
+    if not rows:  # no per-pair prices to extend buy&hold; still extend the bot line
+        rows = [{"timestamp": now_iso, "equity": float(eq), "cash": cash}]
+    return pd.concat([equity_df, pd.DataFrame(rows)], ignore_index=True)
+
+
 def window_df(df: pd.DataFrame, days: int | None) -> pd.DataFrame:
     if df.empty or days is None or "timestamp" not in df:
         return df
@@ -233,6 +259,7 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
     # 3) Jak to szło
     st.subheader("Jak to szło")
     rng_label = st.radio("Zakres", list(RANGES), horizontal=True, label_visibility="collapsed")
+    equity_df = with_live_point(equity_df, state)  # curve tracks 'Ile masz', not just closes
     win = window_df(equity_df, RANGES[rng_label])
     strat_eq = book_equity_series(win)
     if len(strat_eq):
