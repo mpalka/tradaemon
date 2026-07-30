@@ -540,17 +540,28 @@ def render_crypto() -> None:
 # The module selector lives OUTSIDE the auto-refreshing fragment: switching it must
 # trigger a full rerun (a widget inside a run_every fragment would drop the change).
 st.title("TraDaemon 👹💰")
-_module = st.radio("Moduł", ["Krypto-scalper", "Zarządca portfela"],
+_module = st.radio("Moduł", ["Krypto-scalper", "Zarządca portfela", "Badania"],
                    horizontal=True, label_visibility="collapsed")
 
 
 @st.fragment(run_every="15s")
-def render() -> None:
+def render_live() -> None:
+    """The two modules that hold positions — auto-refreshed."""
     if _module == "Zarządca portfela":
         from trademon.dashboard import portfolio_view
         portfolio_view.render()
     else:
         render_crypto()
+
+
+def render() -> None:
+    if _module == "Badania":
+        # Studies produce a report, not a position: nothing here changes every 15s,
+        # and auto-refresh would fight the buttons and the date input.
+        from trademon.dashboard import research_view
+        research_view.render()
+    else:
+        render_live()
 
 
 render()

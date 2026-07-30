@@ -105,7 +105,11 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%d_%H%M%S")
     (out_dir / f"screen_{stamp}.txt").write_text(report)
-    result.to_csv(out_dir / f"screen_{stamp}.csv", index=False)
+    # Record the cutoff in the file itself: a saved --as-of run is a snapshot of what
+    # was knowable back then, and without this the dashboard would show a 2016-vintage
+    # screen under today's date as if it were current.
+    result.assign(as_of=args.as_of or "").to_csv(
+        out_dir / f"screen_{stamp}.csv", index=False)
     log.info("report saved to %s", out_dir)
 
     keepers = result[result["verdict"] == "KANDYDAT"]

@@ -107,7 +107,17 @@ Bez żargonu — wszystko po polsku:
 
 ### Przełącznik modułu (u góry)
 
-**Krypto-scalper · Zarządca portfela** — zmienia ekran na drugi moduł.
+**Krypto-scalper · Zarządca portfela · Badania** — trzy ekrany.
+
+Pierwsze dwa prowadzą portfel i odświeżają się co 15 s. **Badania** to co innego:
+narzędzia, które nie trzymają żadnej pozycji, tylko odpowiadają na pytanie „czy ten
+pomysł się broni?". Zakładka czyta ostatni zapisany raport z `models/reports/`
+i pozwala go przeliczyć na danych z dysku (bez pobierania, żeby nie blokować panelu):
+
+- **Ranking przekrojowy** (Moduł 3) — macierz rynek × kierunek × okno, miara
+  „odchyleń od zera" i ostrzeżenie o błędzie przetrwania;
+- **Przesiew dywersyfikacji** — tabela korelacji z werdyktami; przebieg `--as-of`
+  jest wyraźnie oznaczony, żeby historyczny przesiew nie udawał aktualnego.
 
 ### Uczciwe liczby: ile pieniędzy naprawdę gra
 
