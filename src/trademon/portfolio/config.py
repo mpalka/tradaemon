@@ -32,11 +32,24 @@ class TrendConfig(BaseModel):
     safe_asset: str | None = None     # where an "off" asset's weight goes (None -> cash)
 
 
+class ScreenConfig(BaseModel):
+    """Diversification screen: what to measure the basket's candidates against.
+
+    VT (Vanguard Total World) is the USD proxy for FTSE All-World with the longest
+    history on Yahoo. VWRL.L is the literal FTSE All-World UCITS ETF but quotes in
+    GBP, which would mix a currency effect into every correlation.
+    """
+    benchmark: str = "VT"
+    years: int = 10
+    candidates: list[str] = Field(default_factory=list)
+
+
 class PortfolioConfig(BaseModel):
     source: str = "yahoo"
     assets: list[AssetConfig] = Field(default_factory=list)
     rebalance: RebalanceConfig = RebalanceConfig()
     trend: TrendConfig = TrendConfig()
+    screen: ScreenConfig = ScreenConfig()
     costs: CostsConfig = CostsConfig()
     paths: PathsConfig = PathsConfig()
     initial_capital: float = 10_000.0

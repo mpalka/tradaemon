@@ -209,6 +209,55 @@ Dashboard automatycznie odkrywa księgi z `runtime/portfolio/*/state.json` i pok
 - Panel zdrowia (świeżość danych, ostatni rebalans)
 
 
+## Przesiew dywersyfikacji (Moduł 2)
+
+Odpowiada na pytanie o ryzyko, nie o prognozę: **jeśli rynek światowy spada, co w
+koszyku nie spada razem z nim?** Benchmark to `VT` (Vanguard Total World — USD-owy
+odpowiednik FTSE All-World z najdłuższą historią na Yahoo).
+
+```bash
+python scripts/correlation_screen.py                      # ostatnie 10 lat
+python scripts/correlation_screen.py --as-of 2016-07-30   # co metoda wybrałaby WTEDY
+```
+
+### Wynik: ujemnie skorelowanych aktywów praktycznie nie ma
+
+Na 36 kandydatach, 119 miesięcy do lipca 2026, ujemną korelację z VT ma 8 — i **każde
+z nich traci pieniądze z konstrukcji** (SH −14%/rok, VIXY −46%/rok). Wśród aktywów
+o dodatnim zwrocie najniżej jest UUP (−0,44) i złoto (+0,21).
+
+**Kolumna, która niesie treść, to zakres kroczący, nie średnia:**
+
+| Aktywo | Korelacja | Zakres 3-letni | CAGR |
+|---|---|---|---|
+| **GLD** | +0,21 | **−0,02 … +0,40** | **+11,8%** |
+| TLT | +0,21 | −0,47 … **+0,75** | **−5,2%** |
+| UUP | −0,44 | −0,67 … −0,28 | +1,3% |
+| SH (odwrotny S&P) | −0,95 | −0,97 … −0,92 | −14,2% |
+
+TLT wygląda jak dywersyfikator średnio, ale skoczył do **+0,75** w 2022 — przestał
+chronić dokładnie wtedy, gdy był potrzebny, a przez dekadę stracił 5,2% rocznie.
+Dlatego werdykty to `KANDYDAT` / `NIESTABILNY` / `TRACI` / `PUŁAPKA`, a nie sam ranking.
+
+### Najważniejsze: test bez wiedzy o przyszłości (`--as-of`)
+
+Przesiew na danych **do 2016** wskazałby jako dwa najlepsze **UUP i TLT** — TLT miało
+wtedy korelację −0,27, nigdy dodatnią (max −0,08) i +5,4%/rok. Idealny dywersyfikator
+wg tej metody. Zastosowany na kolejne 10 lat:
+
+| Koszyk | Wynik | CAGR | Sharpe | Obsunięcie |
+|---|---|---|---|---|
+| wg przesiewu z 2016 (SPY/UUP/TLT) | +87,2% | 6,50% | 0,75 | **−15,4%** |
+| obecny (SPY/TLT/GLD) | +112,5% | 7,87% | 0,77 | −24,9% |
+| wg przesiewu z 2026 (SPY/GLD/UUP) | +179,5% | 10,87% | 1,06 | −18,1% |
+
+**Metoda wskazała w 2016 aktywo, które potem zawiodło** — bo korelacje i zwroty są
+własnością reżimu, a 10-letnie okno opisuje reżim, który się właśnie skończył.
+Trzecia linia wygląda najlepiej wyłącznie dlatego, że wybierano ją **po fakcie**.
+
+To, co przetrwało uczciwy test: **najniższe obsunięcie (−15,4%)**. Przesiew nie
+podnosi zwrotu, ale realnie ogranicza ryzyko — i to jest jego uczciwa wartość.
+
 ## Moduł 3: Ranking przekrojowy (badanie, bez księgi na żywo)
 
 Zamiast „czy BTC wzrośnie" (hipoteza Modułu 1, zmierzona na ≈ zero) pyta: **które

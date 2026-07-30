@@ -23,3 +23,30 @@ trend:
   enabled: false
   ma_days: 200
   safe_asset: TLT
+
+# Diversification screen (scripts/correlation_screen.py): what moves differently from
+# world equities? Benchmark VT = Vanguard Total World, the USD proxy for FTSE
+# All-World with the longest Yahoo history (VWRL.L is the literal FTSE All-World ETF
+# but quotes in GBP, which would mix a currency effect into every correlation).
+#
+# The candidate list deliberately includes inverse and volatility products (SH, PSQ,
+# VIXY, BTAL). They top any correlation ranking and lose money by construction — the
+# screen has to flag them, so it needs to see them.
+screen:
+  benchmark: VT
+  years: 10
+  candidates:
+    # bonds, across maturities and credit
+    [TLT, IEF, SHY, BIL, TIP, LQD, HYG, AGG, BNDX, EMB,
+     # metals and commodities
+     GLD, SLV, DBC, PDBC, USO, PPLT, GDX,
+     # currencies (dollar, yen, franc — classic risk-off destinations)
+     UUP, FXY, FXF,
+     # alternatives: managed futures, anti-beta, volatility
+     DBMF, KMLM, BTAL, VIXY,
+     # real assets and defensive equity
+     VNQ, VNQI, IGF, XLU, XLP, USMV,
+     # inverse equity (structural decay — included to be flagged, not recommended)
+     SH, PSQ,
+     # broad equity, as a sanity check that the screen ranks them last
+     SPY, QQQ, EFA, EEM]

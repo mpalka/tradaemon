@@ -99,6 +99,24 @@ def download_etf(data_dir: Path, symbol: str) -> pd.DataFrame:
     return merged
 
 
+def load_wide_panel(data_dir: Path, symbols: list[str]) -> pd.DataFrame:
+    """Close-price panel keeping every symbol's full history, NaN where it had none.
+
+    Unlike `load_panel`, this does not drop rows with gaps. That matters for pairwise
+    work such as the correlation screen: aligning on the youngest ticker would silently
+    shrink a 10-year question to however long the newest fund has existed — one 2020
+    launch truncated a 120-month window to 67 months.
+    """
+    series: dict[str, pd.Series] = {}
+    for sym in symbols:
+        df = storage.load_ohlcv(path_for(data_dir, sym))
+        if not df.empty:
+            series[sym] = df.set_index("timestamp")["close"].sort_index()
+    if not series:
+        return pd.DataFrame()
+    return pd.DataFrame(series).sort_index().ffill()
+
+
 def load_panel(data_dir: Path, symbols: list[str]) -> pd.DataFrame:
     """Aligned close-price panel: DatetimeIndex, one column per symbol. Starts at
     the first date where every symbol has data; forward-fills interior gaps."""
