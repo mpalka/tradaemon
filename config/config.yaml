@@ -61,3 +61,19 @@ variants:
   - {name: prog_055, prob_threshold: 0.55}
   - {name: prog_050, prob_threshold: 0.50}
   - {name: prog_065, prob_threshold: 0.65}
+  # Risk-appetite A/B. Identical signal to prog_050 (the primary book) — only the
+  # sizing differs: 5 x 20% = up to 100% of the account in the market, against
+  # prog_050's 3 x 10% = 30%. Everything else is held equal so the equity curves
+  # isolate one thing: what raising the appetite does.
+  #
+  # Expect it to lose, and to lose more than 3.3x as fast. On the measured daily
+  # returns the crypto strategy's Kelly-optimal fraction is ~0.47 — below 1x — so
+  # 100% exposure is roughly twice past the optimum, where the variance penalty
+  # (L^2) overtakes the return (L). The point of this book is to make that visible
+  # day by day rather than argued on a chart.
+  - {name: ryzyko_100, prob_threshold: 0.50, position_pct: 0.20, max_open_positions: 5}
+
+# Which book the beginner screen calls "Twój portfel". Pinned so the high-appetite
+# experiment above can never drift onto the main screen as if it were the portfolio;
+# it belongs in the Warianty comparison, where its cost is visible next to the others.
+primary_variant: prog_050
