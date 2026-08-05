@@ -17,6 +17,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+from trademon import config_store
 from trademon.backtest.metrics import (
     avg_exposure_pct,
     max_drawdown,
@@ -26,7 +27,7 @@ from trademon.backtest.metrics import (
     time_in_market_pct,
 )
 from trademon.config import load_config
-from trademon.dashboard import humanize
+from trademon.dashboard import humanize, layout
 from trademon.data.storage import TIMEFRAME_MS
 from trademon.research.log import load_experiments
 
@@ -90,6 +91,12 @@ def load_jsonl(path: Path) -> pd.DataFrame:
     if not path.exists() or path.stat().st_size == 0:
         return pd.DataFrame()
     return pd.DataFrame([json.loads(x) for x in path.read_text().splitlines() if x.strip()])
+
+
+def load_config_history() -> list[dict]:
+    """Config edits made from the config screen; shared by the chart marker and the
+    history panel. The journal lives next to the books, so it survives restarts."""
+    return config_store.load_history(runtime)
 
 
 def pnl_color(v: float) -> str:
@@ -202,6 +209,30 @@ def live_metrics(equity_df: pd.DataFrame, trades: pd.DataFrame, timeframe: str) 
     return m
 
 
+def config_change_marks(start, end) -> alt.Chart | None:
+    """Dashed rules where the configuration changed.
+
+    Changing a parameter mid-flight makes everything after it a different strategy on
+    the same curve. Without the seam drawn, comparing a book before and after an edit
+    silently averages two experiments — the marker is what keeps the chart honest.
+    """
+    rows = load_config_history()
+    if not rows:
+        return None
+    df = pd.DataFrame(rows)
+    df["timestamp"] = to_local(df["timestamp"])
+    df = df[(df["timestamp"] >= start) & (df["timestamp"] <= end)]
+    if df.empty:
+        return None
+    df = (df.groupby("timestamp", as_index=False)
+            .agg(zmiany=("field", lambda s: ", ".join(sorted(set(s))))))
+    return alt.Chart(df).mark_rule(color=humanize.MUTED, strokeDash=[4, 4]).encode(
+        x=alt.X("timestamp:T"),
+        tooltip=[alt.Tooltip("timestamp:T", title="Zmiana ustawień", format="%d.%m.%Y %H:%M"),
+                 alt.Tooltip("zmiany:N", title="Pola")],
+    )
+
+
 def equity_chart(strat: pd.DataFrame, bh: pd.DataFrame,
                  bh_fair: pd.DataFrame | None = None) -> alt.Chart:
     layers = [strat.assign(seria=S_BOT)[["timestamp", "equity", "seria"]]]
@@ -211,19 +242,19 @@ def equity_chart(strat: pd.DataFrame, bh: pd.DataFrame,
         layers.append(bh_fair.assign(seria=S_BH_FAIR)[["timestamp", "equity", "seria"]])
     data = pd.concat(layers, ignore_index=True)
     data["timestamp"] = to_local(data["timestamp"])
-    return (
-        alt.Chart(data).mark_line().encode(
-            x=alt.X("timestamp:T", title=None,
-                    axis=alt.Axis(format="%d.%m %H:%M", grid=False)),
-            y=alt.Y("equity:Q", title="Wartość ($)", scale=alt.Scale(zero=False, nice=False)),
-            color=alt.Color("seria:N", title=None,
-                            scale=alt.Scale(domain=[S_BOT, S_BH_ALL, S_BH_FAIR],
-                                            range=[ACCENT, BH_COLOR, BH_FAIR_COLOR])),
-            tooltip=[alt.Tooltip("timestamp:T", title="Czas", format="%d.%m.%Y %H:%M"),
-                     alt.Tooltip("equity:Q", title="Wartość ($)", format=",.2f"),
-                     alt.Tooltip("seria:N", title="Seria")],
-        ).properties(height=300)
+    lines = alt.Chart(data).mark_line().encode(
+        x=alt.X("timestamp:T", title=None, axis=layout.time_axis()),
+        y=alt.Y("equity:Q", title="Wartość ($)", scale=alt.Scale(zero=False, nice=False)),
+        color=alt.Color("seria:N", title=None, legend=layout.legend(),
+                        scale=alt.Scale(domain=[S_BOT, S_BH_ALL, S_BH_FAIR],
+                                        range=[ACCENT, BH_COLOR, BH_FAIR_COLOR])),
+        tooltip=[alt.Tooltip("timestamp:T", title="Czas", format="%d.%m.%Y %H:%M"),
+                 alt.Tooltip("equity:Q", title="Wartość ($)", format=",.2f"),
+                 alt.Tooltip("seria:N", title="Seria")],
     )
+    marks = config_change_marks(data["timestamp"].min(), data["timestamp"].max())
+    chart = alt.layer(lines, marks) if marks is not None else lines
+    return chart.properties(height=layout.chart_height())
 
 
 # ---------- beginner main screen (crypto) ----------
@@ -271,7 +302,7 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
             bh = bh.assign(equity=bh["equity"] * scale)
         if len(bh_fair):
             bh_fair = bh_fair.assign(equity=bh_fair["equity"] * scale)
-        st.altair_chart(equity_chart(strat_eq, bh, bh_fair), use_container_width=True)
+        st.altair_chart(equity_chart(strat_eq, bh, bh_fair), width="stretch")
         st.caption(
             f"Obie szare linie to „kup i trzymaj\", czyli kupić raz i czekać. Bot trzymał "
             f"w rynku średnio **{at_work:.0f}% pieniędzy**, więc uczciwe porównanie to "
@@ -356,10 +387,15 @@ def tab_analytics(trades: pd.DataFrame) -> None:
         pnl_netto=("pnl", "sum"),
         prowizje=("fees", "sum"),
     ).reset_index().sort_values("pnl_netto", ascending=False)
-    st.dataframe(
-        per.style.map(pnl_color, subset=["pnl_netto"]).format(
-            {"win_rate": "{:.0f}%", "pnl_netto": "{:+.2f}", "prowizje": "{:.2f}"}),
-        use_container_width=True, hide_index=True)
+    if layout.is_mobile():
+        layout.cards(per, "symbol", ["pnl_netto", "win_rate", "transakcje"],
+                     {"pnl_netto": "+.2f", "win_rate": ".0f", "transakcje": ".0f"},
+                     color_by="pnl_netto")
+    else:
+        st.dataframe(
+            per.style.map(pnl_color, subset=["pnl_netto"]).format(
+                {"win_rate": "{:.0f}%", "pnl_netto": "{:+.2f}", "prowizje": "{:.2f}"}),
+            width="stretch", hide_index=True)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -368,8 +404,8 @@ def tab_analytics(trades: pd.DataFrame) -> None:
             x=alt.X("pnl:Q", bin=alt.Bin(maxbins=30), title="PnL (USDT)"),
             y=alt.Y("count()", title="Liczba"),
             color=alt.condition(alt.datum.pnl > 0, alt.value(GOOD), alt.value(BAD)),
-        ).properties(height=240)
-        st.altair_chart(hist, use_container_width=True)
+        ).properties(height=layout.chart_height(240))
+        st.altair_chart(hist, width="stretch")
     with col2:
         st.subheader("Powody wyjścia")
         if "exit_reason" in trades:
@@ -378,8 +414,8 @@ def tab_analytics(trades: pd.DataFrame) -> None:
             bar = alt.Chart(reasons).mark_bar(color=ACCENT).encode(
                 x=alt.X("liczba:Q", title="Liczba"),
                 y=alt.Y("powód:N", title=None, sort="-x"),
-            ).properties(height=240)
-            st.altair_chart(bar, use_container_width=True)
+            ).properties(height=layout.chart_height(240))
+            st.altair_chart(bar, width="stretch")
 
 
 def tab_model(state: dict) -> None:
@@ -396,8 +432,12 @@ def tab_model(state: dict) -> None:
         "Decyzja": humanize.REASON_PL.get(sig.get("reason", ""), sig.get("reason", "")),
     } for sym, sig in signals.items()]
     df = pd.DataFrame(rows).sort_values("p(long)", ascending=False, na_position="last")
-    st.dataframe(df.style.format({"p(long)": "{:.3f}", "Próg": "{:.2f}"}, na_rep="—"),
-                 use_container_width=True, hide_index=True)
+    if layout.is_mobile():
+        layout.cards(df, "Para", ["p(long)", "Próg", "Decyzja"],
+                     {"p(long)": ".3f", "Próg": ".2f"})
+    else:
+        st.dataframe(df.style.format({"p(long)": "{:.3f}", "Próg": "{:.2f}"}, na_rep="—"),
+                     width="stretch", hide_index=True)
 
 
 def tab_variants(books: dict[str, Path]) -> None:
@@ -424,15 +464,23 @@ def tab_variants(books: dict[str, Path]) -> None:
     if curves:
         data = pd.concat(curves, ignore_index=True)
         chart = alt.Chart(data).mark_line().encode(
-            x=alt.X("timestamp:T", title=None),
+            x=alt.X("timestamp:T", title=None, axis=layout.time_axis()),
             y=alt.Y("equity:Q", title="Kapitał (USDT)", scale=alt.Scale(zero=False)),
-            color=alt.Color("wariant:N", title="Wariant"),
-        ).properties(height=320)
-        st.altair_chart(chart, use_container_width=True)
-    st.dataframe(pd.DataFrame(metric_rows).style.format(
-        {"Kapitał": "{:,.2f}", "Sharpe": "{:.2f}", "Max DD %": "{:.2f}",
-         "W grze %": "{:.0f}", "Wynik od tego %": "{:+.2f}",
-         "Win rate %": "{:.0f}"}, na_rep="—"), use_container_width=True, hide_index=True)
+            color=alt.Color("wariant:N", title="Wariant", legend=layout.legend("Wariant")),
+        ).properties(height=layout.chart_height(320))
+        st.altair_chart(chart, width="stretch")
+    metrics_df = pd.DataFrame(metric_rows)
+    if layout.is_mobile():
+        # Eight columns do not fit; equity, Sharpe and drawdown are what the A/B
+        # comparison is actually for.
+        layout.cards(metrics_df, "Wariant", ["Kapitał", "Sharpe", "Max DD %", "Transakcje"],
+                     {"Kapitał": ",.2f", "Sharpe": ".2f", "Max DD %": ".2f",
+                      "Transakcje": ".0f"})
+    else:
+        st.dataframe(metrics_df.style.format(
+            {"Kapitał": "{:,.2f}", "Sharpe": "{:.2f}", "Max DD %": "{:.2f}",
+             "W grze %": "{:.0f}", "Wynik od tego %": "{:+.2f}",
+             "Win rate %": "{:.0f}"}, na_rep="—"), width="stretch", hide_index=True)
 
 
 def tab_experiments() -> None:
@@ -446,7 +494,14 @@ def tab_experiments() -> None:
     cols = [c for c in ["timestamp", "kind", "timeframe", "window_days", "pairs",
                         "mean_return_pct", "benchmark_return_pct", "total_trades", "report"]
             if c in df]
-    st.dataframe(df[cols], use_container_width=True, hide_index=True)
+    if layout.is_mobile():
+        layout.cards(df[cols], "kind",
+                     ["timestamp", "mean_return_pct", "benchmark_return_pct", "total_trades"],
+                     {"mean_return_pct": "+.2f", "benchmark_return_pct": "+.2f",
+                      "total_trades": ".0f"},
+                     color_by="mean_return_pct")
+    else:
+        st.dataframe(df[cols], width="stretch", hide_index=True)
 
 
 def tab_health(books: dict[str, Path]) -> None:
@@ -489,8 +544,14 @@ def tab_health(books: dict[str, Path]) -> None:
         len(f) for f in frames) else pd.DataFrame()
     if len(alerts):
         alerts = alerts.drop_duplicates().sort_values("timestamp", ascending=False).head(30)
-        st.dataframe(alerts[[c for c in ["timestamp", "kind", "message", "variant"]
-                             if c in alerts]], use_container_width=True, hide_index=True)
+        alert_cols = [c for c in ["timestamp", "kind", "message", "variant"] if c in alerts]
+        if layout.is_mobile():
+            # Alerts already carry a Polish sentence; the timeline reads better than a grid.
+            for rec in alerts.head(layout.max_cards() * 2).to_dict("records"):
+                e = humanize.event_line(rec, DISPLAY_TZ)
+                st.markdown(f"{e['emoji']} &nbsp;`{e['time']}` &nbsp; {e['text']}")
+        else:
+            st.dataframe(alerts[alert_cols], width="stretch", hide_index=True)
     else:
         st.caption("Brak alertów.")
 
@@ -514,7 +575,12 @@ def render_crypto() -> None:
         st.caption(f"Twój portfel: **{primary}** (pozostałe warianty w Szczegółach)")
     render_beginner(state, equity_df, trades, alerts)
 
-    with st.expander("🔬 Szczegóły dla dociekliwych"):
+    # Desktop tabs switch client-side, but the mobile segmented control triggers a
+    # rerun — which would slam the expander shut on every panel change. Reading the
+    # control's stored value *before* the expander renders keeps it open once used.
+    details_key = "crypto_details_panel"
+    with st.expander("🔬 Szczegóły dla dociekliwych",
+                     expanded=bool(st.session_state.get(details_key))):
         sel = st.selectbox("Księga (wariant)", names,
                            index=names.index(primary)) if len(names) > 1 else primary
         d = books[sel]
@@ -522,17 +588,24 @@ def render_crypto() -> None:
         s_eq = load_jsonl(d / "equity.jsonl")
         s_tr = load_jsonl(d / "trades.jsonl")
         tab_metrics(s_eq, s_tr, s_state)
-        t = st.tabs(["Analityka", "Model", "Warianty", "Eksperymenty", "Zdrowie"])
-        with t[0]:
-            tab_analytics(s_tr)
-        with t[1]:
-            tab_model(s_state)
-        with t[2]:
-            tab_variants(books)
-        with t[3]:
-            tab_experiments()
-        with t[4]:
-            tab_health(books)
+        panels = {
+            "Analityka": lambda: tab_analytics(s_tr),
+            "Model": lambda: tab_model(s_state),
+            "Warianty": lambda: tab_variants(books),
+            "Eksperymenty": tab_experiments,
+            "Zdrowie": lambda: tab_health(books),
+        }
+        if layout.is_mobile():
+            # Five tabs in a row scroll off a 390px screen with no hint that more
+            # exist; a segmented control wraps onto as many lines as it needs.
+            choice = st.segmented_control("Szczegóły", list(panels), default="Analityka",
+                                          label_visibility="collapsed", key=details_key)
+            panels[choice or "Analityka"]()
+        else:
+            for tab, render_panel in zip(st.tabs(list(panels)), panels.values(),
+                                         strict=True):
+                with tab:
+                    render_panel()
 
 
 # ---------- app ----------
@@ -540,11 +613,14 @@ def render_crypto() -> None:
 # The module selector lives OUTSIDE the auto-refreshing fragment: switching it must
 # trigger a full rerun (a widget inside a run_every fragment would drop the change).
 st.title("TraDaemon 👹💰")
-_module = st.radio("Moduł", ["Krypto-scalper", "Zarządca portfela", "Badania"],
-                   horizontal=True, label_visibility="collapsed")
+MODULES = ["Krypto-scalper", "Zarządca portfela", "Badania", "Ustawienia"]
+# segmented_control wraps onto several lines when the labels do not fit, where a
+# horizontal radio would overflow the viewport at 390px.
+_module = st.segmented_control("Moduł", MODULES, default=MODULES[0],
+                               label_visibility="collapsed") or MODULES[0]
 
 
-@st.fragment(run_every="15s")
+@st.fragment(run_every=layout.refresh_interval())
 def render_live() -> None:
     """The two modules that hold positions — auto-refreshed."""
     if _module == "Zarządca portfela":
@@ -555,7 +631,12 @@ def render_live() -> None:
 
 
 def render() -> None:
-    if _module == "Badania":
+    if _module == "Ustawienia":
+        # Writing config must never sit inside a run_every fragment: an auto-rerun
+        # mid-edit would discard whatever is typed into the form.
+        from trademon.dashboard import config_view
+        config_view.render()
+    elif _module == "Badania":
         # Studies produce a report, not a position: nothing here changes every 15s,
         # and auto-refresh would fight the buttons and the date input.
         from trademon.dashboard import research_view

@@ -6,7 +6,7 @@ import asyncio
 import logging
 
 from trademon.config import load_config
-from trademon.engine.loop import TradingEngine
+from trademon.engine.loop import RestartRequested, TradingEngine
 from trademon.execution.executors import PaperExecutor
 from trademon.models.train import load_bundles
 
@@ -60,6 +60,11 @@ def main() -> None:
         asyncio.run(engine.run())
     except KeyboardInterrupt:
         log.info("shutting down (state persisted)")
+    except RestartRequested:
+        # Exit 0 on purpose: `restart: unless-stopped` restarts a container that
+        # stopped for any reason, and a clean code keeps this out of the crash logs.
+        # Books were persisted on the way out and reload themselves on the way back.
+        log.info("restarting to pick up the new configuration (state persisted)")
 
 
 if __name__ == "__main__":

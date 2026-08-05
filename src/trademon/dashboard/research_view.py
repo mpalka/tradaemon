@@ -20,6 +20,7 @@ import pandas as pd
 import streamlit as st
 
 from trademon.config import load_config
+from trademon.dashboard import layout
 from trademon.portfolio.config import load_portfolio_config
 
 cfg = load_config()
@@ -94,7 +95,8 @@ def tab_crosssec() -> None:
     full = df[df["window"] == 0]
     if len(full):
         st.markdown("**Czy wynik jest odróżnialny od szczęścia?**")
-        cols = st.columns(len(full))
+        # One column per row would stack into a very long strip on a phone.
+        cols = st.columns(min(len(full), 2) if layout.is_mobile() else len(full))
         for col, (_, r) in zip(cols, full.iterrows(), strict=False):
             sig = abs(r["sigmas_from_zero"]) >= SIGMA_BAR
             col.metric(f"{r['market']} · {r['direction']}",
@@ -122,7 +124,7 @@ def tab_crosssec() -> None:
                                     ["wynik %", "poprzeczka %", "nadwyżka pkt",
                                      "netto %"]}
                                    | {"Sharpe": "{:.2f}", "obsunięcie %": "{:.1f}"}),
-                 use_container_width=True, hide_index=True)
+                 width="stretch", hide_index=True)
 
     for (market, direction), g in per_window.groupby(["market", "direction"]):
         wins = int((g["excess_vs_hurdle_pp"] > 0).sum())
@@ -192,11 +194,15 @@ def tab_screen() -> None:
     def colour(v: str) -> str:
         return f"color: {VERDICT_STYLE.get(v, '')}; font-weight: 600"
 
-    st.dataframe(
-        view.style.map(colour, subset=["werdykt"]).format(
-            {"korelacja": "{:+.2f}", "min 3-let.": "{:+.2f}", "max 3-let.": "{:+.2f}",
-             "CAGR %": "{:+.1f}"}),
-        use_container_width=True, hide_index=True, height=420)
+    if layout.is_mobile():
+        layout.cards(view, "aktywo", ["werdykt", "korelacja", "CAGR %"],
+                     {"korelacja": "+.2f", "CAGR %": "+.1f"})
+    else:
+        st.dataframe(
+            view.style.map(colour, subset=["werdykt"]).format(
+                {"korelacja": "{:+.2f}", "min 3-let.": "{:+.2f}", "max 3-let.": "{:+.2f}",
+                 "CAGR %": "{:+.1f}"}),
+            width="stretch", hide_index=True, height=420)
     st.caption(" · ".join(f"**{k}** = {v}" for k, v in VERDICT_HELP.items()))
 
     st.error("**Ta tabela opisuje reżim, który się właśnie skończył.** Przesiew "
@@ -219,8 +225,14 @@ def tab_screen() -> None:
 def render() -> None:
     st.caption("Narzędzia badawcze — **nie prowadzą portfela**. Odpowiadają na "
                "pytanie „czy ten pomysł się broni?”, a nie „ile masz teraz”.")
-    tabs = st.tabs(["📊 Ranking przekrojowy", "🧭 Przesiew dywersyfikacji"])
-    with tabs[0]:
-        tab_crosssec()
-    with tabs[1]:
-        tab_screen()
+    panels = {"📊 Ranking przekrojowy": tab_crosssec,
+              "🧭 Przesiew dywersyfikacji": tab_screen}
+    if layout.is_mobile():
+        first = next(iter(panels))
+        choice = st.segmented_control("Badanie", list(panels), default=first,
+                                      label_visibility="collapsed")
+        panels[choice or first]()
+    else:
+        for tab, render_panel in zip(st.tabs(list(panels)), panels.values(), strict=True):
+            with tab:
+                render_panel()

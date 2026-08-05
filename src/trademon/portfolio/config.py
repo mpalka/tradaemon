@@ -7,10 +7,15 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-import yaml
 from pydantic import BaseModel, Field
 
-from trademon.config import PROJECT_ROOT, CostsConfig, PathsConfig
+from trademon.config import (
+    PROJECT_ROOT,
+    CostsConfig,
+    PathsConfig,
+    deep_merge,
+    load_raw_config,
+)
 
 
 class AssetConfig(BaseModel):
@@ -96,11 +101,12 @@ def _find_config_path(explicit: str | Path | None) -> Path:
 
 
 def load_portfolio_config(path: str | Path | None = None) -> PortfolioConfig:
-    """Load portfolio.yaml and resolve data/models/runtime next to the config dir."""
+    """Load portfolio.yaml (+ portfolio.overrides.yaml) and resolve data/models/runtime
+    next to the config dir."""
     cfg_path = _find_config_path(path)
     base = cfg_path.resolve().parent.parent  # directory that contains config/
-    with open(cfg_path) as f:
-        raw = yaml.safe_load(f) or {}
+    defaults, overrides = load_raw_config(cfg_path)
+    raw = deep_merge(defaults, overrides)
     cfg = PortfolioConfig.model_validate(raw)
     cfg = cfg.model_copy(update={"paths": cfg.paths.resolve(base)})
     for d in (cfg.paths.data_dir, cfg.paths.models_dir, cfg.paths.runtime_dir):

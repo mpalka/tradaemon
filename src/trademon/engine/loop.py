@@ -20,7 +20,8 @@ from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
-from trademon.config import Config
+from trademon.config import Config, config_path, load_config, overrides_path
+from trademon.config_store import restart_requested_at
 from trademon.data import storage
 from trademon.engine.notify import send_webhook
 from trademon.engine.state import RuntimeStore
@@ -34,6 +35,21 @@ log = logging.getLogger(__name__)
 
 POLL_SECONDS = 5.0
 TICKER_SECONDS = 60.0
+RESTART_POLL_SECONDS = 10.0
+
+# Config fields a running book can adopt on its next candle, because they are read
+# fresh out of self.cfg inside _maybe_enter / _manage_position. Everything else
+# (symbols, timeframe, warmup, the variant list) is baked into __init__ or the feed
+# and needs the restart handshake instead — see config_store.RESTART_FIELDS.
+HOT_STRATEGY_FIELDS = ("prob_threshold", "tp_atr_mult", "sl_atr_mult",
+                       "horizon_bars", "atr_period", "direction")
+HOT_RISK_FIELDS = ("position_pct", "max_open_positions",
+                   "daily_loss_limit_pct", "drawdown_alert_pct")
+HOT_COST_FIELDS = ("taker_fee", "maker_fee", "slippage_bps")
+
+
+class RestartRequested(Exception):
+    """The dashboard asked the engine to come back with a fresh config."""
 
 
 @dataclass
@@ -101,6 +117,8 @@ class Book:
         self._bar_delta = timedelta(milliseconds=storage.TIMEFRAME_MS[cfg.exchange.timeframe])
         self._model_path = cfg.paths.models_dir / "model_long.joblib"
         self._model_mtime = self._current_model_mtime()
+        self._overrides_path = overrides_path(config_path())
+        self._overrides_mtime = self._current_overrides_mtime()
 
     # ---------- models ----------
 
@@ -116,6 +134,83 @@ class Book:
                 log.info("[%s] reloaded models (updated on disk)", self.name)
             except Exception:
                 log.exception("[%s] model reload failed, keeping current models", self.name)
+
+    # ---------- config ----------
+
+    def _current_overrides_mtime(self) -> float:
+        return self._overrides_path.stat().st_mtime if self._overrides_path.exists() else 0.0
+
+    def _fresh_variant_config(self) -> Config | None:
+        """Reload config.yaml + overrides and re-apply this book's variant overrides.
+
+        Returns None when the book can no longer be identified in the fresh config —
+        that means the `variants:` list itself changed, which is a restart-only edit,
+        so the safe move is to keep running on the parameters we started with rather
+        than silently adopting the base config's.
+        """
+        fresh = load_config()
+        if not fresh.variants:
+            return fresh if self.name == "default" else None
+        match = next((v for v in fresh.variants if v.name == self.name), None)
+        if match is None:
+            log.warning("[%s] not in the reloaded variants list — keeping current config "
+                        "(restart the engine to pick up variant changes)", self.name)
+            return None
+        return fresh.for_variant(match)
+
+    def _maybe_reload_config(self, now: datetime) -> None:
+        """Adopt hot config fields written by the dashboard. Mirrors the model
+        hot-reload above: watch an mtime, reload, never let a bad file stop trading."""
+        mtime = self._current_overrides_mtime()
+        if mtime <= self._overrides_mtime:
+            return
+        self._overrides_mtime = mtime
+        try:
+            fresh = self._fresh_variant_config()
+        except Exception:
+            log.exception("[%s] config reload failed, keeping current config", self.name)
+            return
+        if fresh is None:
+            return
+
+        changes: list[str] = []
+        strat = self.cfg.strategy.model_dump()
+        for f in HOT_STRATEGY_FIELDS:
+            new = getattr(fresh.strategy, f)
+            if strat[f] != new:
+                changes.append(f"{f}: {strat[f]} → {new}")
+                strat[f] = new
+        risk = self.cfg.risk.model_dump()
+        for f in HOT_RISK_FIELDS:
+            new = getattr(fresh.risk, f)
+            if risk[f] != new:
+                changes.append(f"{f}: {risk[f]} → {new}")
+                risk[f] = new
+        costs = self.cfg.costs.model_dump()
+        for f in HOT_COST_FIELDS:
+            new = getattr(fresh.costs, f)
+            if costs[f] != new:
+                changes.append(f"{f}: {costs[f]} → {new}")
+                costs[f] = new
+        if not changes:
+            return
+
+        self.cfg = self.cfg.model_copy(update={
+            "strategy": type(self.cfg.strategy)(**strat),
+            "risk": type(self.cfg.risk)(**risk),
+            "costs": type(self.cfg.costs)(**costs),
+        })
+        self.risk.cfg = self.cfg.risk
+        # horizon_bars feeds the buffer length; keeping more history is harmless and
+        # keeping too little would starve the features, so recompute it here.
+        self._buffer_len = (self.cfg.strategy.warmup_bars
+                            + int(self.cfg.strategy.horizon_bars) + 50)
+        # The executor is shared across books and prices paper fills from its own
+        # reference to CostsConfig; costs are not variant-overridable, so every book
+        # writes the same value and the repeat is idempotent.
+        if hasattr(self.executor, "costs"):
+            self.executor.costs = self.cfg.costs
+        self.alert("config", "zmieniono ustawienia: " + ", ".join(changes), now)
 
     # ---------- state ----------
 
@@ -195,6 +290,7 @@ class Book:
         now: datetime = bar["timestamp"].to_pydatetime()
 
         self._maybe_reload_models()
+        self._maybe_reload_config(now)
         self._manage_position(symbol, bar, now)
         self._maybe_enter(symbol, buf, bar, now)
 
@@ -387,6 +483,25 @@ class TradingEngine:
             log.exception("%s: WebSocket feed failed, falling back to REST polling", symbol)
             await self._poll_feed(rest_exchange, symbol, last_seen)
 
+    async def _restart_watcher(self) -> None:
+        """Exit cleanly when the dashboard asks for a restart.
+
+        Structural config (symbols, timeframe, the variant list) is read once at
+        startup, so the only honest way to change it is to come back up. The
+        dashboard has no Docker socket — it writes a flag, and this decides when to
+        go down. run()'s finally block persists every book first, Book.restore()
+        reads cash and open positions back, and `restart: unless-stopped` supplies
+        the actual restart.
+        """
+        started = datetime.now(UTC)
+        runtime_dir = self.cfg.paths.runtime_dir
+        while True:
+            await asyncio.sleep(RESTART_POLL_SECONDS)
+            requested = restart_requested_at(runtime_dir)
+            if requested is not None and requested > started:
+                log.info("restart requested at %s — persisting books and exiting", requested)
+                raise RestartRequested
+
     async def _ticker_loop(self, rest_exchange) -> None:
         """Mark-to-market valuation for the dashboard; never trades."""
         symbols = self.cfg.exchange.symbols
@@ -420,17 +535,27 @@ class TradingEngine:
             now = datetime.now(UTC)
             for book in self.books:
                 book.persist(now)
-            tasks = []
+            coros = []
             for symbol in self.cfg.exchange.symbols:
                 if ws_exchange is not None:
-                    tasks.append(self._ws_feed_with_fallback(
+                    coros.append(self._ws_feed_with_fallback(
                         ws_exchange, rest_exchange, symbol, last_seen))
                 else:
-                    tasks.append(self._poll_feed(rest_exchange, symbol, last_seen))
-            tasks.append(self._ticker_loop(rest_exchange))
+                    coros.append(self._poll_feed(rest_exchange, symbol, last_seen))
+            coros.append(self._ticker_loop(rest_exchange))
+            coros.append(self._restart_watcher())
             log.info("engine running in %s mode: %d book(s) on %s",
                      self.cfg.mode, len(self.books), self.cfg.exchange.symbols)
-            await asyncio.gather(*tasks)
+            # gather() propagates the first exception but leaves the siblings running,
+            # so cancel them explicitly — otherwise a restart request would persist
+            # state while the feeds kept trading underneath it.
+            tasks = [asyncio.create_task(c) for c in coros]
+            try:
+                await asyncio.gather(*tasks)
+            finally:
+                for t in tasks:
+                    t.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
         finally:
             for book in self.books:
                 book.persist(datetime.now(UTC))

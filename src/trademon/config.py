@@ -161,12 +161,58 @@ def _find_config_path(explicit: str | Path | None) -> Path:
     return PROJECT_ROOT / "config" / "config.yaml"
 
 
+def config_path() -> Path:
+    """The config.yaml this process would load, resolved the same way load_config
+    resolves it. Lets the engine watch the overrides file for changes."""
+    return _find_config_path(None)
+
+
+def overrides_path(cfg_path: Path) -> Path:
+    """Sibling file holding the dashboard's edits: config.yaml -> config.overrides.yaml,
+    portfolio.yaml -> portfolio.overrides.yaml."""
+    return cfg_path.with_name(f"{cfg_path.stem}.overrides.yaml")
+
+
+def deep_merge(base: dict, over: dict) -> dict:
+    """Merge `over` onto `base`: dicts recurse, everything else replaces.
+
+    Lists replace wholesale on purpose. `symbols` and `variants` are the two lists
+    here, and merging them element-wise would silently keep a removed pair trading
+    or leave half of an old variant's overrides in place — a per-index merge is a
+    trap, not a convenience.
+    """
+    out = dict(base)
+    for key, val in over.items():
+        if isinstance(val, dict) and isinstance(out.get(key), dict):
+            out[key] = deep_merge(out[key], val)
+        else:
+            out[key] = val
+    return out
+
+
+def load_raw_config(cfg_path: Path) -> tuple[dict, dict]:
+    """Return (defaults from config.yaml, overrides from overrides.yaml).
+
+    config.yaml is the documented baseline and is never written to — the dashboard's
+    config screen only ever writes overrides.yaml, so the research commentary in the
+    baseline survives every edit and "restore default" is just dropping a key.
+    """
+    with open(cfg_path) as f:
+        defaults = yaml.safe_load(f) or {}
+    over_path = overrides_path(cfg_path)
+    if not over_path.exists():
+        return defaults, {}
+    with open(over_path) as f:
+        return defaults, yaml.safe_load(f) or {}
+
+
 def load_config(path: str | Path | None = None) -> Config:
-    """Load config.yaml and resolve data/models/runtime next to the config dir."""
+    """Load config.yaml (+ overrides.yaml) and resolve data/models/runtime next to
+    the config dir."""
     cfg_path = _find_config_path(path)
     base = cfg_path.resolve().parent.parent  # directory that contains config/
-    with open(cfg_path) as f:
-        raw = yaml.safe_load(f) or {}
+    defaults, overrides = load_raw_config(cfg_path)
+    raw = deep_merge(defaults, overrides)
     cfg = Config.model_validate(raw)
     cfg = cfg.model_copy(update={"paths": cfg.paths.resolve(base)})
     for d in (cfg.paths.data_dir, cfg.paths.models_dir, cfg.paths.runtime_dir):
