@@ -79,6 +79,32 @@ def test_bot_status_empty():
     assert not humanize.bot_status({}, 1000, datetime.now(UTC))["ok"]
 
 
+def test_connection_status_beats_the_candle_clock():
+    """The case that sent us looking: on 4h bars `bot_status` still reads green
+    an hour after the exchange went silent, so the panel needs a faster signal."""
+    now = datetime(2026, 8, 7, 22, 0, tzinfo=UTC)
+    candles = {"BTC/USDT": "2026-08-07T17:00:00+00:00"}
+    assert humanize.bot_status(candles, 4 * 3_600_000, now)["ok"]      # still green
+    dead = humanize.connection_status("2026-08-07T21:00:00+00:00", now)
+    assert not dead["ok"] and "brak kontaktu" in dead["text"]
+
+
+def test_connection_status_fresh_and_stale():
+    now = datetime(2026, 8, 7, 22, 0, tzinfo=UTC)
+    live = humanize.connection_status("2026-08-07T21:59:51+00:00", now)
+    assert live["ok"] and "przed chwilą" in live["text"]
+    # exactly at the threshold still counts as alive; one second past it does not
+    edge = humanize.connection_status("2026-08-07T21:55:00+00:00", now)
+    assert edge["ok"]
+    assert not humanize.connection_status("2026-08-07T21:54:59+00:00", now)["ok"]
+
+
+def test_connection_status_without_a_heartbeat():
+    now = datetime(2026, 8, 7, 22, 0, tzinfo=UTC)
+    assert not humanize.connection_status(None, now)["ok"]
+    assert not humanize.connection_status("nie-data", now)["ok"]
+
+
 def test_bot_status_healthy_mid_window_stays_green():
     # A 4h candle opened 04:00 closes 08:00. Just before the next close (12:00)
     # its open time is ~8h old — but the bot is healthy and must read 🟢.

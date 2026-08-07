@@ -203,3 +203,51 @@ def bot_status(last_candle_ts: dict, timeframe_ms: int, now: datetime,
                         f"następna około {_fmt_time(next_at, tz)}"}
     return {"ok": False, "emoji": "🔴",
             "text": f"może nie odpowiadać — ostatnia świeca zamknięta {when}"}
+
+
+# A stalled ticker is the earliest honest sign of trouble, so the panel may not
+# wait longer than this before saying so. Five minutes is four missed refreshes:
+# short enough to catch a real outage while it is still news, long enough that a
+# single slow request does not cry wolf.
+CONNECTION_STALE_SECONDS = 300
+
+
+def _ago(seconds: float) -> str:
+    """How long ago, in words that dodge Polish plurals — "3 minuty" vs "5 minut"
+    is a rule this line does not need to know."""
+    if seconds < 90:
+        return "przed chwilą"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return f"{minutes} min temu"
+    return f"{minutes // 60} h {minutes % 60} min temu"
+
+
+def connection_status(updated_at: str | datetime | None, now: datetime) -> dict:
+    """Is the bot actually reaching the exchange *right now*?
+
+    `bot_status` answers a different question — whether a candle is overdue — and
+    on 4h bars it stays green for hours after the exchange has gone silent. This
+    reads `state.json`'s `updated_at`, which the ticker rewrites every 60 s and
+    only ever on a successful call, so it is the sharpest liveness signal we have.
+
+    It exists because the alert journal could not answer this. A dropped
+    connection files "brak połączenia z giełdą", but the matching all-clear is
+    written by the process that saw the outage — and a container that restarts in
+    between starts clean and never writes it. The alarm then hangs there,
+    truthful about the past and misleading about the present. A heartbeat cannot
+    go stale that way: it either ticked recently or it did not.
+    """
+    if not updated_at:
+        return {"ok": False, "emoji": "📡", "text": "brak kontaktu z giełdą"}
+    try:
+        ts = updated_at if isinstance(updated_at, datetime) else datetime.fromisoformat(
+            str(updated_at))
+    except ValueError:
+        return {"ok": False, "emoji": "📡", "text": "nieznany czas kontaktu z giełdą"}
+    seconds = (now - ts).total_seconds()
+    if seconds <= CONNECTION_STALE_SECONDS:
+        return {"ok": True, "emoji": "📡",
+                "text": f"kontakt z giełdą: {_ago(seconds)}"}
+    return {"ok": False, "emoji": "📡",
+            "text": f"brak kontaktu z giełdą od {_ago(seconds)} — bot czeka i ponawia"}

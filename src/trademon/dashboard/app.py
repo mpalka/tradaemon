@@ -278,6 +278,14 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
                                      TIMEFRAME_MS.get(tf, 0), datetime.now(UTC), DISPLAY_TZ)
         st.markdown(f"### {status['emoji']} Status bota")
         st.markdown(status["text"])
+        # The candle clock above is coarse by nature — on 4h bars it stays green
+        # for hours after the exchange goes quiet. This line is the live one.
+        conn = humanize.connection_status(state.get("updated_at"), datetime.now(UTC))
+        colour = humanize.GOOD if conn["ok"] else humanize.BAD
+        # &nbsp; on purpose: Streamlit's markdown drops a plain space that sits
+        # between an emoji and an inline tag, gluing the two together.
+        st.markdown(f"{conn['emoji']}&nbsp;<span style='color:{colour}'>{conn['text']}</span>",
+                    unsafe_allow_html=True)
         if state.get("kill_switch"):
             st.warning("🛑 Bezpiecznik dzienny włączony — bot nie otwiera teraz nowych pozycji.")
 

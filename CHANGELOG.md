@@ -3,6 +3,17 @@
 Najnowsze na górze. Numer wersji z tego pliku musi zgadzać się z `__version__`
 w `src/trademon/__init__.py` — pilnuje tego `tests/test_version.py`.
 
+## 0.1.5 — 2026-08-07
+
+- Panel pokazuje pod statusem bota **żywy kontakt z giełdą** („kontakt z giełdą:
+  przed chwilą" / „brak kontaktu od 47 min"). Liczony z `updated_at`, które ticker
+  odświeża co 60 s wyłącznie po udanym zapytaniu — więc reaguje w minuty, a nie
+  po godzinach jak zegar świec.
+- To domyka lukę z 0.1.3: alert „brak połączenia z giełdą" zapisywał ten sam
+  proces, który widział awarię, więc po restarcie kontenera odwołanie nigdy nie
+  powstawało i w dzienniku wisiał alarm prawdziwy o przeszłości, a mylący co do
+  teraz. Bicie serca nie może się w ten sposób zdezaktualizować.
+
 ## 0.1.4 — 2026-08-07
 
 - Wycofane wymuszanie publicznych resolwerów DNS w `docker-compose.yml`. Teoria,
