@@ -2,6 +2,16 @@ services:
   bot:
     build: .
     command: python -m trademon.engine
+    # Explicit resolvers, in the repo rather than in a NAS-only override file.
+    # Compose hands containers 127.0.0.11, which forwards to the host's
+    # /etc/resolv.conf — and on DSM that is often a loopback address, which inside
+    # a container points at the container. The bot then dies on every candle fetch
+    # with "Temporary failure in name resolution" and `restart: unless-stopped`
+    # feeds it straight back into the same lookup (826 restarts in five hours, the
+    # first time this bit us). Every host we reach is public, so overriding the
+    # host's resolver cannot break a local name. YAML anchors are expanded by the
+    # parser, not by Compose, so Container Manager's older Compose handles them.
+    dns: &dns [1.1.1.1, 1.0.0.1, 8.8.8.8]
     # Classic string form: the extended `path:`/`required:` syntax needs
     # Compose 2.20+, which Synology's Container Manager does not ship.
     # Consequence: .env must exist — `cp .env.example .env` on a fresh checkout.
@@ -17,6 +27,7 @@ services:
   dashboard:
     build: .
     command: streamlit run src/trademon/dashboard/app.py --server.address 0.0.0.0 --server.port 8501
+    dns: *dns
     ports:
       - "8501:8501"
     volumes:
@@ -31,6 +42,7 @@ services:
   portfolio:
     build: .
     command: python -m trademon.portfolio
+    dns: *dns
     # Classic string form: the extended `path:`/`required:` syntax needs
     # Compose 2.20+, which Synology's Container Manager does not ship.
     # Consequence: .env must exist — `cp .env.example .env` on a fresh checkout.
@@ -47,6 +59,7 @@ services:
   # The bot hot-reloads promoted models on its next candle (no restart needed).
   refresher:
     build: .
+    dns: *dns
     command: >
       sh -c "while true; do
         python scripts/refresh.py || echo 'refresh gate failed or errored — kept current model';

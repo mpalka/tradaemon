@@ -161,8 +161,15 @@ def with_live_point(equity_df: pd.DataFrame, state: dict) -> pd.DataFrame:
     rows = [{"timestamp": now_iso, "symbol": s, "close": last_close[s],
              "equity": float(eq), "cash": cash}
             for s in hist_syms if s in last_close]
-    if not rows:  # no per-pair prices to extend buy&hold; still extend the bot line
-        rows = [{"timestamp": now_iso, "equity": float(eq), "cash": cash}]
+    if not rows:
+        # Only per-pair rows are appended. A row without prices would extend the
+        # bot's line past both benchmarks — buy_hold_curve pivots on `symbol` and
+        # drops it — which is exactly how a dead engine used to render: a flat blue
+        # tail running off to the right of the grey ones, looking like a bot that
+        # was merely idle. There is nothing honest to draw there either, because
+        # equity() without prices is the entry price restated, not a valuation.
+        # The curves end where the data ends; bot_status above says the rest.
+        return equity_df
     return pd.concat([equity_df, pd.DataFrame(rows)], ignore_index=True)
 
 

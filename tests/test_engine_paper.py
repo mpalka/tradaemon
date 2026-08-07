@@ -1,9 +1,11 @@
+import asyncio
 import json
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
 
-from trademon.engine.loop import Book
+from trademon.engine.loop import Book, TradingEngine
 from trademon.engine.state import RuntimeStore
 from trademon.execution.executors import PaperExecutor
 
@@ -166,3 +168,88 @@ def test_state_restore_round_trip(engine, cfg, tmp_path):
     p1, p2 = engine.positions["BTC/USDT"], engine2.positions["BTC/USDT"]
     assert p2.qty == pytest.approx(p1.qty)
     assert p2.deadline == p1.deadline
+    # Prices too, not just money: persist() writes them, so restore() must read them.
+    assert engine2.last_close == engine.last_close
+    assert engine2.last_candle_ts == engine.last_candle_ts
+
+
+def test_a_restored_book_persists_prices_it_never_saw_a_candle_for(engine, cfg):
+    """The regression behind the missing buy&hold lines.
+
+    A start that dies before the first candle still reaches a persist on the way
+    out. It used to write empty `last_close`/`last_candle_ts` over good ones, which
+    the panel then read as "the engine is live but knows no prices" — and drew the
+    bot's line past both benchmarks. Asserted on the file, because the file is what
+    the dashboard reads.
+    """
+    feed(engine, make_ohlcv(cfg.strategy.warmup_bars + 5))
+    before = json.loads(engine.store.state_path.read_text())
+    assert before["last_close"] and before["last_candle_ts"]
+
+    fresh = Book("default", cfg, FakeBundle(), PaperExecutor(cfg), engine.store)
+    fresh.restore()
+    fresh.persist(datetime.now(UTC))   # no candle in between
+
+    after = json.loads(engine.store.state_path.read_text())
+    assert after["last_close"] == before["last_close"]
+    assert after["last_candle_ts"] == before["last_candle_ts"]
+
+
+def test_seed_buffer_counts_as_having_read_the_market(engine, cfg):
+    """Otherwise the panel calls a healthy, freshly restarted bot 🔴 for four hours."""
+    df = make_ohlcv(50)
+    engine.seed_buffer("BTC/USDT", df)
+    assert engine.last_candle_ts["BTC/USDT"] == df["timestamp"].iloc[-1].isoformat()
+
+
+class FlakyExchange:
+    """Fails `fail_times` times, then serves candles — a DNS outage at startup."""
+
+    def __init__(self, df: pd.DataFrame, fail_times: int):
+        self.remaining = fail_times
+        self.calls = 0
+        self.raw = [[int(r.timestamp.timestamp() * 1000), r.open, r.high,
+                     r.low, r.close, r.volume] for r in df.itertuples()]
+
+    async def fetch_ohlcv(self, symbol, timeframe, limit=None):
+        self.calls += 1
+        if self.remaining > 0:
+            self.remaining -= 1
+            raise ConnectionError("Temporary failure in name resolution")
+        return self.raw
+
+
+def test_bootstrap_waits_the_network_out_instead_of_dying(engine, cfg, tmp_path, monkeypatch):
+    """The NAS failure: without this the process exits and Docker restarts it
+    straight back into the same lookup — 826 times in five hours."""
+    import trademon.engine.loop as loop_mod
+    monkeypatch.setattr(loop_mod, "RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(loop_mod, "MAX_RETRY_SECONDS", 0.0)
+
+    eng = TradingEngine(cfg, FakeBundle(), PaperExecutor(cfg), books=[engine])
+    # Long enough to trip CONNECTION_ALERT_AFTER, so the journal side is covered too.
+    fake = FlakyExchange(make_ohlcv(50), fail_times=loop_mod.CONNECTION_ALERT_AFTER)
+    last_seen = asyncio.run(eng._bootstrap_with_retry(fake))
+
+    assert fake.calls == loop_mod.CONNECTION_ALERT_AFTER + 1   # failures, then success
+    assert last_seen["BTC/USDT"] is not None
+    assert engine.last_close["BTC/USDT"] > 0
+
+    alerts = [json.loads(x) for x in engine.store.alerts_path.read_text().splitlines()]
+    kinds = [a["kind"] for a in alerts]
+    assert kinds.count("connection") == 2   # one for the outage, one for the recovery
+
+
+def test_a_start_that_never_ran_leaves_the_book_alone(engine, cfg, tmp_path):
+    """A state.json too corrupt to parse used to be overwritten by a virgin book."""
+    feed(engine, make_ohlcv(cfg.strategy.warmup_bars + 5))
+    engine.store.state_path.write_text('{"cash": 1')   # truncated mid-write
+    corrupt = engine.store.state_path.read_bytes()
+
+    eng = TradingEngine(cfg, FakeBundle(), PaperExecutor(cfg),
+                        books=[Book("default", cfg, FakeBundle(),
+                                    PaperExecutor(cfg), engine.store)])
+    with pytest.raises(json.JSONDecodeError):
+        asyncio.run(eng.run())
+
+    assert engine.store.state_path.read_bytes() == corrupt

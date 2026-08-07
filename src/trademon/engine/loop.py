@@ -37,6 +37,15 @@ POLL_SECONDS = 5.0
 TICKER_SECONDS = 60.0
 RESTART_POLL_SECONDS = 10.0
 
+# Backoff for every network retry here. The first waits are short because the
+# common failure is a NAS that came up before its router did; the ceiling is five
+# minutes because on 4h candles noticing recovery five minutes late costs 2% of one
+# bar, while retrying every five seconds through a six-hour outage buries the
+# container log — which on Synology is not rotated.
+RETRY_SECONDS = 5.0
+MAX_RETRY_SECONDS = 300.0
+CONNECTION_ALERT_AFTER = 3   # failed attempts before the journals are told
+
 # Config fields a running book can adopt on its next candle, because they are read
 # fresh out of self.cfg inside _maybe_enter / _manage_position. Everything else
 # (symbols, timeframe, warmup, the variant list) is baked into __init__ or the feed
@@ -242,6 +251,14 @@ class Book:
         }
         self._peak_equity = float(state.get("peak_equity", self.cash))
         self.risk.restore(state.get("risk", {}))
+        # persist() writes five facts about the market; this used to read three. That
+        # asymmetry was the bug: a start that died before seed_buffer ran still
+        # reached the persist on the way out and wrote back the empty dicts __init__
+        # had left, while equity() — having no prices — valued every position at its
+        # entry. The file looked plausible instead of empty, and the panel drew a
+        # live point the benchmarks could not match.
+        self.last_close = {s: float(v) for s, v in state.get("last_close", {}).items()}
+        self.last_candle_ts = dict(state.get("last_candle_ts", {}))
         log.info("[%s] restored: cash=%.2f, open positions: %s",
                  self.name, self.cash, list(self.positions) or "none")
 
@@ -269,6 +286,12 @@ class Book:
         self.buffers[symbol] = df
         if len(df):
             self.last_close[symbol] = float(df["close"].iloc[-1])
+            # The preload drops the still-open candle, so this row *is* the last
+            # closed one, by its open time — exactly what bot_status reasons about.
+            # Without it the panel calls a freshly restarted, perfectly healthy bot
+            # "jeszcze nie odczytał rynku" until the next candle closes: four hours
+            # of red light for nothing.
+            self.last_candle_ts[symbol] = df["timestamp"].iloc[-1].isoformat()
 
     def mark_to_market(self, prices: dict[str, float], now: datetime) -> None:
         """Display-only valuation refresh (ticker); never trades."""
@@ -497,8 +520,55 @@ class TradingEngine:
             log.info("%s: preloaded %d candles", symbol, len(df))
         return last_seen
 
+    def _alert_books(self, kind: str, message: str) -> None:
+        """Tell every book the same thing. Per book rather than to the shared journal
+        because the beginner screen reads only the primary book's events, and a book
+        whose journal never mentions an outage reads as a book that had nothing to say."""
+        now = datetime.now(UTC)
+        for book in self.books:
+            book.alert(kind, message, now)
+
+    async def _bootstrap_with_retry(self, rest_exchange) -> dict[str, pd.Timestamp | None]:
+        """Preload candles, waiting the network out instead of dying on it.
+
+        Retrying here rather than letting the process exit is the difference between
+        an engine that is quiet for an hour and a container that restarts 826 times in
+        five hours: `restart: unless-stopped` brings the process straight back into
+        the same failed lookup, with no backoff and no memory of having tried.
+
+        Never gives up on purpose — there is nothing a caller could do that this loop
+        is not already doing, and a 4h bot loses nothing by waiting. A partial attempt
+        is safe to repeat: seed_buffer overwrites per symbol, so a failure on the
+        seventh pair simply re-seeds the first six on the next pass. The exchange
+        object is reused across attempts because ccxt caches markets only on success,
+        and a fresh one would leak an aiohttp session per try.
+        """
+        delay, fails = RETRY_SECONDS, 0
+        while True:
+            try:
+                last_seen = await self._bootstrap(rest_exchange)
+            except Exception:   # not BaseException: CancelledError must still pass
+                fails += 1
+                if fails == 1:
+                    log.exception("startup: could not reach the exchange, retrying")
+                else:
+                    # One traceback names the cause; 826 copies of it name nothing.
+                    log.warning("startup: exchange still unreachable (attempt %d), "
+                                "retrying in %.0fs", fails, delay)
+                if fails == CONNECTION_ALERT_AFTER:
+                    self._alert_books("connection", "brak połączenia z giełdą — "
+                                      "ponawiam, na razie nie handluję")
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, MAX_RETRY_SECONDS)
+                continue
+            if fails >= CONNECTION_ALERT_AFTER:
+                self._alert_books("connection", "połączenie z giełdą wróciło — "
+                                  "bot znowu czyta rynek")
+            return last_seen
+
     async def _poll_feed(self, rest_exchange, symbol: str, last_seen) -> None:
         timeframe = self.cfg.exchange.timeframe
+        fails = 0
         while True:
             try:
                 raw = await rest_exchange.fetch_ohlcv(symbol, timeframe, limit=3)
@@ -506,9 +576,17 @@ class TradingEngine:
                     if last_seen[symbol] is None or row["timestamp"] > last_seen[symbol]:
                         last_seen[symbol] = row["timestamp"]
                         self.dispatch(symbol, row.to_dict())
+                fails = 0
             except Exception:
-                log.exception("%s: poll feed error, retrying", symbol)
-            await asyncio.sleep(POLL_SECONDS)
+                fails += 1
+                if fails == 1:
+                    log.exception("%s: poll feed error, retrying", symbol)
+                else:
+                    log.warning("%s: poll feed still failing (%d in a row)", symbol, fails)
+            # Backing off matters more than it looks: ten pairs polling every 5s
+            # through an outage is 7200 failures an hour into an unrotated log.
+            await asyncio.sleep(POLL_SECONDS if not fails else
+                                min(POLL_SECONDS * 2 ** fails, MAX_RETRY_SECONDS))
 
     async def _ws_feed(self, ws_exchange, symbol: str) -> None:
         timeframe = self.cfg.exchange.timeframe
@@ -551,6 +629,7 @@ class TradingEngine:
     async def _ticker_loop(self, rest_exchange) -> None:
         """Mark-to-market valuation for the dashboard; never trades."""
         symbols = self.cfg.exchange.symbols
+        fails = 0
         while True:
             await asyncio.sleep(TICKER_SECONDS)
             try:
@@ -561,7 +640,13 @@ class TradingEngine:
                 for book in self.books:
                     book.mark_to_market(prices, now)
             except Exception:
-                log.exception("ticker refresh failed, retrying")
+                if not fails:
+                    log.exception("ticker refresh failed, retrying")
+                else:
+                    log.warning("ticker refresh still failing (%d in a row)", fails + 1)
+                fails += 1
+            else:
+                fails = 0
 
     async def run(self) -> None:
         import ccxt.async_support as ccxt_async
@@ -577,7 +662,7 @@ class TradingEngine:
         try:
             for book in self.books:
                 book.restore()
-            last_seen = await self._bootstrap(rest_exchange)
+            last_seen = await self._bootstrap_with_retry(rest_exchange)
             now = datetime.now(UTC)
             for book in self.books:
                 book.persist(now)
@@ -602,9 +687,16 @@ class TradingEngine:
                 for t in tasks:
                     t.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
+                # Persist here rather than in the outer finally: this is the only
+                # branch where a book can differ from what restore() read. A startup
+                # that never got past the preload has nothing to save, and saving
+                # anyway stamps a fresh updated_at on a state nobody refreshed — the
+                # panel reads that field as "the engine knew this much at this
+                # moment". It also means a state.json too corrupt to parse is no
+                # longer overwritten with a virgin 1000 USDT book.
+                for book in self.books:
+                    book.persist(datetime.now(UTC))
         finally:
-            for book in self.books:
-                book.persist(datetime.now(UTC))
             await rest_exchange.close()
             if ws_exchange is not None:
                 await ws_exchange.close()

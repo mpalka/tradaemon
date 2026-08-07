@@ -142,24 +142,11 @@ się na `services.bot.env_file.0 must be a string`. Dlatego
 opcjonalna. Puste wartości nie przeszkadzają — klucze giełdy są potrzebne
 dopiero w trybie live.
 
-## 4. DNS dla kontenerów (inaczej bot nie dosięgnie giełdy)
+## 4. DNS dla kontenerów (już ustawiony w `docker-compose.yml`)
 
-Zanim wystartujesz, połóż na NAS-ie plik nakładkowy — Compose scala
-`docker-compose.override.yml` z głównym automatycznie, więc repo zostaje czyste:
-
-```bash
-ssh <nas> 'cat > /volume1/docker/trademon/docker-compose.override.yml' <<'YAML'
-services:
-  bot:
-    dns: [1.1.1.1, 8.8.8.8]
-  dashboard:
-    dns: [1.1.1.1, 8.8.8.8]
-  portfolio:
-    dns: [1.1.1.1, 8.8.8.8]
-  refresher:
-    dns: [1.1.1.1, 8.8.8.8]
-YAML
-```
+Nic tu nie musisz robić — `docker-compose.yml` ustawia wszystkim czterem usługom
+`dns: [1.1.1.1, 1.0.0.1, 8.8.8.8]`. Warto jednak wiedzieć, po co, bo objaw jest
+mylący i kosztował już jedną cichą awarię.
 
 Bez tego bot wstaje, odtwarza księgi i dopiero przy pierwszym pobraniu świec
 wywala się na `socket.gaierror: [Errno -3] Temporary failure in name
@@ -169,8 +156,25 @@ własną sieć bridge z resolverem `127.0.0.11`, który przekazuje zapytania do
 `/etc/resolv.conf` NAS-a. Jeśli stoi tam adres pętli zwrotnej (typowe na DSM,
 np. przy pakiecie DNS Server), wewnątrz kontenera wskazuje on na sam kontener.
 
-Zamiast publicznych resolverów możesz wpisać adres swojego routera —
+Wcześniej stał tu przepis na `docker-compose.override.yml` kładziony na NAS-ie
+poza repo. Brzmiało czysto, ale plik nie jest w gicie ani w paczce z kroku 8, więc
+po prostu zniknął — a `restart: unless-stopped` zamienił to w 826 restartów w
+pięć godzin. Dlatego resolwery są teraz w repo. Wszystkie hosty, do których
+sięgamy, są publiczne, więc nadpisanie resolwera hosta nie może popsuć nazwy
+lokalnej.
+
+**Wolisz swój router?** Podmień listę w `docker-compose.yml` na jego adres —
 `ssh <nas> 'cat /etc/resolv.conf'` pokaże, czym posługuje się sam NAS.
+
+**Sprawdzenie po starcie** (obraz to `python:3.12-slim`, więc bez `dig`, `ping`
+i `curl`):
+
+```bash
+sudo docker compose exec bot getent hosts api.binance.com
+```
+
+Ma wypisać adres IP. Jeśli milczy, DNS nadal nie działa i nie ma sensu szukać
+przyczyny w kodzie bota.
 
 ## 5. Start kontenerów
 

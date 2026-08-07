@@ -38,6 +38,7 @@ ALERT_EMOJI = {
     "trade_open": "🟢",
     "trade_close": "🔁",
     "trade_rollover": "⏩",
+    "connection": "📡",
     "kill_switch": "🛑",
     "drawdown": "⚠️",
     "rebalance": "⚖️",
