@@ -153,13 +153,18 @@ Nic tu nie musisz robić — `docker-compose.yml` ustawia wszystkim czterem usł
 `dns: [1.1.1.1, 1.0.0.1, 8.8.8.8]`. Warto jednak wiedzieć, po co, bo objaw jest
 mylący i kosztował już jedną cichą awarię.
 
-Bez tego bot wstaje, odtwarza księgi i dopiero przy pierwszym pobraniu świec
-wywala się na `socket.gaierror: [Errno -3] Temporary failure in name
-resolution` (ccxt nie dosięga `api.binance.com`). Mylące jest to, że **build
-działa** — `docker build` używa DNS hosta wprost, a `docker compose` tworzy
-własną sieć bridge z resolverem `127.0.0.11`, który przekazuje zapytania do
-`/etc/resolv.conf` NAS-a. Jeśli stoi tam adres pętli zwrotnej (typowe na DSM,
-np. przy pakiecie DNS Server), wewnątrz kontenera wskazuje on na sam kontener.
+Domyślnie `docker compose` tworzy własną sieć bridge z resolverem `127.0.0.11`,
+który przekazuje zapytania do `/etc/resolv.conf` NAS-a. Jeśli stoi tam adres
+pętli zwrotnej (zdarza się na DSM, np. przy pakiecie DNS Server), wewnątrz
+kontenera wskazuje on na sam kontener i nazwy się nie rozwiązują. Jawne
+resolwery to wycinają. Mylące jest przy tym, że **build działa** — `docker
+build` sięga po DNS hosta wprost.
+
+**Uwaga, ważne:** ten sam komunikat (`Temporary failure in name resolution`)
+dostaniesz również wtedy, gdy przyczyna nie ma z DNS-em nic wspólnego — patrz
+„DNS czy brak NAT?" niżej. Zanim zaczniesz zmieniać resolwery, rozstrzygnij,
+który to przypadek; inaczej stracisz wieczór na poprawianie działającej już
+konfiguracji.
 
 Wcześniej stał tu przepis na `docker-compose.override.yml` kładziony na NAS-ie
 poza repo. Brzmiało czysto, ale plik nie jest w gicie ani w paczce z kroku 8, więc
@@ -187,6 +192,35 @@ działa i nie ma sensu szukać przyczyny w kodzie bota. Drugi sygnał: `ls -l` n
 
 Podgląd logów kontenera masz w Container Manager → *Kontener* → `trademon-bot-1`
 → *Dziennik*.
+
+### Gdy bot nie dosięga giełdy: DNS czy brak NAT?
+
+Objaw jest ten sam — `Temporary failure in name resolution` — a przyczyny dwie
+zupełnie różne. `EAI_AGAIN` znaczy „resolwer nie odpowiedział", więc dostaniesz
+go **także wtedy, gdy kontener nie ma w ogóle wyjścia na świat**: zapytanie do
+1.1.1.1 po prostu przepada. Ustawianie kolejnych resolwerów wtedy nic nie da.
+
+Rozstrzygnij to zanim ruszysz konfigurację (wszystko przez SSH z kluczem, bez
+roota):
+
+```bash
+ssh <nas> 'cat /etc/resolv.conf; python3 -c "import socket;print(socket.gethostbyname(\"api.binance.com\"))"; ip -4 -o addr show | grep docker'
+```
+
+- **Host nie rozwiązuje nazwy** → to naprawdę DNS. Sprawdź resolwer w Panelu
+  sterowania → Sieć.
+- **Host rozwiązuje, mostek `docker-*` ma adres `172.x.0.1` i jest UP, a kontener
+  i tak nie wychodzi** → to nie DNS, tylko **brak reguł NAT** dla sieci
+  kontenerów. Docker zakłada je przy starcie demona, a zmiana zapory DSM albo
+  aktualizacja potrafi wyczyścić `iptables` i zabrać je razem z resztą. Mostek
+  zostaje, adres zostaje, trasa zostaje — pakiety wychodzą i nic nie wraca.
+  Widać to po licznikach: `cat /sys/class/net/docker-<hash>/statistics/tx_packets`
+  rośnie, a połączenia i tak wygasają.
+
+  **Lek:** zatrzymaj i uruchom pakiet *Container Manager* (Centrum pakietów, nie
+  sam projekt) — demon przy starcie odtwarza reguły. Jeśli to nie pomoże,
+  restart NAS-a. Przebudowa projektu **nie** naprawia tego, bo problem jest
+  poziom niżej niż compose.
 
 ## 5. Start kontenerów
 
