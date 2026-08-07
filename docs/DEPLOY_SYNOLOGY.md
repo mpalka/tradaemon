@@ -147,34 +147,37 @@ się na `services.bot.env_file.0 must be a string`. Dlatego
 opcjonalna. Puste wartości nie przeszkadzają — klucze giełdy są potrzebne
 dopiero w trybie live.
 
-## 4. DNS dla kontenerów (już ustawiony w `docker-compose.yml`)
+## 4. DNS dla kontenerów — najpierw zmierz, potem ustawiaj
 
-Nic tu nie musisz robić — `docker-compose.yml` ustawia wszystkim czterem usługom
-`dns: [1.1.1.1, 1.0.0.1, 8.8.8.8]`. Warto jednak wiedzieć, po co, bo objaw jest
-mylący i kosztował już jedną cichą awarię.
+**`docker-compose.yml` celowo nie ustawia `dns:`.** Kiedyś ustawiał i to była
+pomyłka warta opisania, bo kosztowała wieczór.
 
-Domyślnie `docker compose` tworzy własną sieć bridge z resolverem `127.0.0.11`,
-który przekazuje zapytania do `/etc/resolv.conf` NAS-a. Jeśli stoi tam adres
-pętli zwrotnej (zdarza się na DSM, np. przy pakiecie DNS Server), wewnątrz
-kontenera wskazuje on na sam kontener i nazwy się nie rozwiązują. Jawne
-resolwery to wycinają. Mylące jest przy tym, że **build działa** — `docker
-build` sięga po DNS hosta wprost.
+Teoria brzmiała rozsądnie: Compose tworzy sieć bridge z resolverem `127.0.0.11`,
+który przekazuje zapytania do `/etc/resolv.conf` NAS-a, a gdyby stał tam adres
+pętli zwrotnej (zdarza się na DSM przy pakiecie DNS Server), wewnątrz kontenera
+wskazywałby na sam kontener. Stąd pomysł na jawne, publiczne resolwery.
+
+Zmierzone na żywym NAS-ie okazało się fałszywe. `/etc/resolv.conf` zawierał
+`nameserver 10.0.0.1` — router, nie pętlę zwrotną — i odpowiadał **20/20 zapytań
+w 5 ms**, szybciej niż którykolwiek publiczny resolwer. Wpisanie `1.1.1.1`
+wypchnęło więc każde zapytanie przez NAT, dokładając zawodności tam, gdzie jej
+nie było, i rozwiązywanie nazw zaczęło się psuć z przerwami.
+
+**Zasada:** domyślne zachowanie (embedded resolver → resolwer hosta) jest
+zarazem najkrótszą i najszybszą drogą. `dns:` dopisuj **dopiero** po
+potwierdzeniu, że resolwer hosta jest naprawdę zepsuty:
+
+```bash
+ssh <nas> 'cat /etc/resolv.conf; python3 -c "import socket;print(socket.gethostbyname(\"api.binance.com\"))"'
+```
+
+Adres pętli zwrotnej w `resolv.conf` albo wyjątek z `gethostbyname` = teoria się
+potwierdza, ustaw `dns:`. Cokolwiek innego = szukaj gdzie indziej.
 
 **Uwaga, ważne:** ten sam komunikat (`Temporary failure in name resolution`)
 dostaniesz również wtedy, gdy przyczyna nie ma z DNS-em nic wspólnego — patrz
-„DNS czy brak NAT?" niżej. Zanim zaczniesz zmieniać resolwery, rozstrzygnij,
-który to przypadek; inaczej stracisz wieczór na poprawianie działającej już
-konfiguracji.
-
-Wcześniej stał tu przepis na `docker-compose.override.yml` kładziony na NAS-ie
-poza repo. Brzmiało czysto, ale plik nie jest w gicie ani w paczce z kroku 8, więc
-po prostu zniknął — a `restart: unless-stopped` zamienił to w 826 restartów w
-pięć godzin. Dlatego resolwery są teraz w repo. Wszystkie hosty, do których
-sięgamy, są publiczne, więc nadpisanie resolwera hosta nie może popsuć nazwy
-lokalnej.
-
-**Wolisz swój router?** Podmień listę w `docker-compose.yml` na jego adres —
-`ssh <nas> 'cat /etc/resolv.conf'` pokaże, czym posługuje się sam NAS.
+„DNS czy brak NAT?" niżej. To właśnie ta pułapka wciągnęła nas w zmienianie
+resolwerów, gdy problem był poziom niżej.
 
 **Sprawdzenie po starcie — bez roota, samym SSH z kluczem.** Nie zaglądaj do
 kontenera (to wymaga `sudo`, patrz krok 5); zajrzyj do plików, które silnik

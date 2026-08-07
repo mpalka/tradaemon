@@ -3,6 +3,17 @@
 Najnowsze na górze. Numer wersji z tego pliku musi zgadzać się z `__version__`
 w `src/trademon/__init__.py` — pilnuje tego `tests/test_version.py`.
 
+## 0.1.4 — 2026-08-07
+
+- Wycofane wymuszanie publicznych resolwerów DNS w `docker-compose.yml`. Teoria,
+  która za tym stała (DSM zostawia w `/etc/resolv.conf` adres pętli zwrotnej),
+  zmierzona na NAS-ie okazała się nieprawdziwa: stoi tam router, który odpowiada
+  20/20 zapytań w 5 ms — szybciej niż jakikolwiek publiczny resolwer. Wpisanie
+  `1.1.1.1` wypychało każde zapytanie przez NAT i psuło rozwiązywanie nazw
+  z przerwami. Domyślne zachowanie Dockera jest tu i krótsze, i pewniejsze.
+- Przewodnik wdrożenia każe teraz **najpierw zmierzyć** resolwer hosta, a dopiero
+  potem cokolwiek ustawiać.
+
 ## 0.1.3 — 2026-08-07
 
 - Silnik nie umiera już na chwilowym braku sieci przy starcie. Pobranie pierwszych
