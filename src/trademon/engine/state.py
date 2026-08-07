@@ -47,3 +47,32 @@ class RuntimeStore:
 
     def append_alert(self, record: dict) -> None:
         self._append(self.alerts_path, record)
+
+    def last_alert(self, kind: str) -> dict | None:
+        """The most recent alert of one kind, or None.
+
+        The only read on a journal the engine otherwise just appends to, and it
+        earns its place: an alert about a *state* (the exchange is unreachable)
+        has to be closed by whoever finds that state over, and after a container
+        restart that is a different process than the one which opened it. Without
+        this the alarm stays the newest line in the log, telling the reader the
+        bot is down long after it came back.
+
+        Reads the whole file because alerts are the small journal — a few hundred
+        rows over weeks, against equity's thousands per month. A malformed line is
+        skipped rather than raised on: a half-written record must not stop a book
+        from starting.
+        """
+        if not self.alerts_path.exists():
+            return None
+        found = None
+        for line in self.alerts_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if record.get("kind") == kind:
+                found = record
+        return found

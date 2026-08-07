@@ -165,6 +165,12 @@ def event_line(record: dict, tz: tzinfo | None = None) -> dict:
     emoji = ALERT_EMOJI.get(kind, "•")
     if kind == "trade_close" and "pnl" in record:
         emoji = "💰" if float(record.get("pnl", 0)) >= 0 else "🔻"
+    if kind == "connection":
+        # Same topic, two states, and the difference has to survive scanning: an
+        # open alarm must not look like the line that ends it. Missing `ok` means
+        # an outage — rows written before the flag existed are all outages, and
+        # reading one of those as an all-clear is the failure worth avoiding.
+        emoji = "✅" if record.get("ok", False) else "📡"
     text = record.get("message")
     if not text:  # fallback for raw trade rows without a friendly message
         if "exit_reason" in record:

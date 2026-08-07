@@ -3,6 +3,16 @@
 Najnowsze na górze. Numer wersji z tego pliku musi zgadzać się z `__version__`
 w `src/trademon/__init__.py` — pilnuje tego `tests/test_version.py`.
 
+## 0.1.6 — 2026-08-08
+
+- Dziennik zdarzeń **sam domyka swoje alarmy**. Gdy bot odzyska łączność, dopisuje
+  „✅ połączenie z giełdą wróciło" — także wtedy, gdy alarm otworzył poprzedni
+  kontener, bo silnik sprawdza przy starcie, czy w dzienniku nie wisi niezamknięta
+  awaria. Wcześniej trzeba było czekać na przypadkowe zdarzenie (przy świecach 4 h
+  nawet kilka godzin), żeby przestać widzieć na górze „brak połączenia".
+- Otwarty alarm i jego odwołanie różnią się ikoną (📡 kontra ✅), więc widać to
+  przy przewijaniu, bez czytania treści.
+
 ## 0.1.5 — 2026-08-07
 
 - Panel pokazuje pod statusem bota **żywy kontakt z giełdą** („kontakt z giełdą:

@@ -99,6 +99,19 @@ def test_connection_status_fresh_and_stale():
     assert not humanize.connection_status("2026-08-07T21:54:59+00:00", now)["ok"]
 
 
+def test_event_line_separates_an_open_outage_from_the_all_clear():
+    lost = humanize.event_line({"kind": "connection", "message": "brak połączenia",
+                                "ok": False, "timestamp": "2026-08-07T21:00:00+00:00"})
+    back = humanize.event_line({"kind": "connection", "message": "połączenie wróciło",
+                                "ok": True, "timestamp": "2026-08-07T21:45:00+00:00"})
+    assert lost["emoji"] == "📡" and back["emoji"] == "✅"
+    # rows written before `ok` existed are outages; reading one as an all-clear
+    # would be the worst way to be wrong
+    legacy = humanize.event_line({"kind": "connection", "message": "brak połączenia",
+                                  "timestamp": "2026-08-07T21:00:00+00:00"})
+    assert legacy["emoji"] == "📡"
+
+
 def test_connection_status_without_a_heartbeat():
     now = datetime(2026, 8, 7, 22, 0, tzinfo=UTC)
     assert not humanize.connection_status(None, now)["ok"]

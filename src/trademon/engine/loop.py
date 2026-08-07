@@ -520,13 +520,35 @@ class TradingEngine:
             log.info("%s: preloaded %d candles", symbol, len(df))
         return last_seen
 
-    def _alert_books(self, kind: str, message: str) -> None:
+    def _alert_books(self, kind: str, message: str, **extra) -> None:
         """Tell every book the same thing. Per book rather than to the shared journal
         because the beginner screen reads only the primary book's events, and a book
         whose journal never mentions an outage reads as a book that had nothing to say."""
         now = datetime.now(UTC)
         for book in self.books:
-            book.alert(kind, message, now)
+            book.alert(kind, message, now, **extra)
+
+    def _clear_connection_alert(self) -> None:
+        """Close an outage the journal still has open — including one opened by a
+        previous process.
+
+        Without this the newest line in the event log stays "brak połączenia z
+        giełdą" until something unrelated happens, and on 4h candles that can be
+        hours away. The reader is then left to infer from silence whether the bot
+        recovered or is still down — and silence looks far more like the latter.
+        A container restart makes it worse, because the process that would have
+        written the all-clear no longer exists.
+
+        `ok` is what makes an outage closeable: two alerts of the same kind, one
+        opening the state and one ending it, instead of a message a human has to
+        interpret.
+        """
+        now = datetime.now(UTC)
+        for book in self.books:
+            last = book.store.last_alert("connection")
+            if last is not None and not last.get("ok", True):
+                book.alert("connection", "połączenie z giełdą wróciło — "
+                           "bot znowu czyta rynek", now, ok=True)
 
     async def _bootstrap_with_retry(self, rest_exchange) -> dict[str, pd.Timestamp | None]:
         """Preload candles, waiting the network out instead of dying on it.
@@ -557,13 +579,13 @@ class TradingEngine:
                                 "retrying in %.0fs", fails, delay)
                 if fails == CONNECTION_ALERT_AFTER:
                     self._alert_books("connection", "brak połączenia z giełdą — "
-                                      "ponawiam, na razie nie handluję")
+                                      "ponawiam, na razie nie handluję", ok=False)
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, MAX_RETRY_SECONDS)
                 continue
-            if fails >= CONNECTION_ALERT_AFTER:
-                self._alert_books("connection", "połączenie z giełdą wróciło — "
-                                  "bot znowu czyta rynek")
+            # Unconditional, not `if fails`: the outage worth closing is usually the
+            # one a previous container opened, and this process never saw it.
+            self._clear_connection_alert()
             return last_seen
 
     async def _poll_feed(self, rest_exchange, symbol: str, last_seen) -> None:

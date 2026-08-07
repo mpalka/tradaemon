@@ -236,8 +236,42 @@ def test_bootstrap_waits_the_network_out_instead_of_dying(engine, cfg, tmp_path,
     assert engine.last_close["BTC/USDT"] > 0
 
     alerts = [json.loads(x) for x in engine.store.alerts_path.read_text().splitlines()]
-    kinds = [a["kind"] for a in alerts]
-    assert kinds.count("connection") == 2   # one for the outage, one for the recovery
+    conn = [a for a in alerts if a["kind"] == "connection"]
+    assert [a["ok"] for a in conn] == [False, True]   # outage opened, then closed
+
+
+def test_an_outage_from_a_previous_container_is_closed_on_recovery(engine, cfg, monkeypatch):
+    """The reported problem: the process that files the outage may never come back.
+
+    Restart the container and the all-clear has no author, so the newest line in
+    the event log keeps saying the exchange is unreachable — for hours, until some
+    unrelated event scrolls it down. The reader cannot tell recovery from silence.
+    """
+    import trademon.engine.loop as loop_mod
+    monkeypatch.setattr(loop_mod, "RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(loop_mod, "MAX_RETRY_SECONDS", 0.0)
+
+    # what the previous container left behind, and nothing else
+    engine.alert("connection", "brak połączenia z giełdą", datetime.now(UTC), ok=False)
+
+    fresh = Book("default", cfg, FakeBundle(), PaperExecutor(cfg), engine.store)
+    eng = TradingEngine(cfg, FakeBundle(), PaperExecutor(cfg), books=[fresh])
+    asyncio.run(eng._bootstrap_with_retry(FlakyExchange(make_ohlcv(50), fail_times=0)))
+
+    alerts = [json.loads(x) for x in engine.store.alerts_path.read_text().splitlines()]
+    assert alerts[-1]["kind"] == "connection" and alerts[-1]["ok"] is True
+
+
+def test_a_clean_start_does_not_invent_a_recovery(engine, cfg, monkeypatch):
+    """No outage on record means nothing to close — otherwise every restart would
+    file a 'connection restored' for a connection that was never lost."""
+    import trademon.engine.loop as loop_mod
+    monkeypatch.setattr(loop_mod, "RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(loop_mod, "MAX_RETRY_SECONDS", 0.0)
+
+    eng = TradingEngine(cfg, FakeBundle(), PaperExecutor(cfg), books=[engine])
+    asyncio.run(eng._bootstrap_with_retry(FlakyExchange(make_ohlcv(50), fail_times=0)))
+    assert engine.store.last_alert("connection") is None
 
 
 def test_a_start_that_never_ran_leaves_the_book_alone(engine, cfg, tmp_path):
