@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, tzinfo
 
+import pandas as pd
+
 GOOD, BAD, MUTED = "#0ca30c", "#d03b3b", "#999999"
 
 # Why the crypto bot did / didn't trade on the last candle (engine `signals`).
@@ -87,6 +89,19 @@ def money2(x: float) -> str:
 
 def signed_money(x: float) -> str:
     return f"{x:+,.2f} $"
+
+
+def to_local(ts, tz: tzinfo | None = None):
+    """UTC/ISO timestamps -> local wall-clock (tz-naive).
+
+    Charts are drawn from naive local times on purpose: Altair would otherwise
+    re-interpret them in the *browser's* zone, so the same candle would sit at a
+    different hour depending on who is looking. Accepts a Series or a scalar.
+    """
+    out = pd.to_datetime(ts, utc=True)
+    if tz is not None:
+        out = out.dt.tz_convert(tz) if hasattr(out, "dt") else out.tz_convert(tz)
+    return out.dt.tz_localize(None) if hasattr(out, "dt") else out.tz_localize(None)
 
 
 def _fmt_time(ts: str | datetime | None, tz: tzinfo | None = None) -> str:

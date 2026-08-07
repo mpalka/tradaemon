@@ -16,7 +16,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from trademon.dashboard import humanize, layout
+from trademon.dashboard import humanize, journals, layout, price_view
 from trademon.portfolio.config import PortfolioConfig, load_portfolio_config
 from trademon.portfolio.data import load_panel
 
@@ -28,12 +28,6 @@ FRESH_DAYS = 4  # daily data over weekends/holidays — allow a few days before 
 def _load_state(book_dir: Path) -> dict | None:
     path = book_dir / "state.json"
     return json.loads(path.read_text()) if path.exists() else None
-
-
-def _load_jsonl(path: Path) -> pd.DataFrame:
-    if not path.exists() or path.stat().st_size == 0:
-        return pd.DataFrame()
-    return pd.DataFrame([json.loads(x) for x in path.read_text().splitlines() if x.strip()])
 
 
 def discover_books(pcfg: PortfolioConfig) -> dict[str, Path]:
@@ -107,7 +101,7 @@ def _status(state: dict) -> dict:
 # ---------- beginner screen ----------
 
 def _render_beginner(pcfg: PortfolioConfig, state: dict, equity_df: pd.DataFrame,
-                     alerts: pd.DataFrame) -> None:
+                     alerts: pd.DataFrame, trades: pd.DataFrame) -> None:
     initial = pcfg.initial_capital
     eq = float(state.get("equity", initial))
     cash = float(state.get("cash", initial))
@@ -149,30 +143,50 @@ def _render_beginner(pcfg: PortfolioConfig, state: dict, equity_df: pd.DataFrame
         st.info("Za mało danych na wykres — bot dopiero zaczyna.")
 
     st.divider()
+    # Same click-to-see-the-price interaction as the crypto screen; the prices come
+    # from the daily Yahoo files instead of the crypto candles.
     st.subheader("Co bot teraz trzyma")
+    price_view.styles()
     holdings = state.get("holdings", {})
     last_close = state.get("last_close", {})
     weights = state.get("weights", {})
     targets = state.get("target_weights", pcfg.base_weights)
     active = {s: q for s, q in holdings.items() if q and last_close.get(s)}
+
+    def prices_for(sym: str) -> pd.DataFrame:
+        return price_view.portfolio_prices(pcfg.paths.data_dir, sym)
+
     if not active:
         st.info("Jeszcze nic — bot czeka na pierwszą alokację.")
     else:
+        st.caption("Kliknij instrument, aby zobaczyć jego kurs.")
         cols = st.columns(min(len(active), 3))
         for i, (sym, qty) in enumerate(active.items()):
             value = qty * last_close.get(sym, 0.0)
             card = humanize.holding_card(sym, value, weights.get(sym, 0.0),
                                          targets.get(sym, 0.0))
             with cols[i % len(cols)]:
-                st.markdown(f"**{card['emoji']} {card['title']}**")
+                price_view.preview_button(f"**{card['emoji']} {card['title']}**", sym,
+                                          "port_pos", key=f"port_pos_{sym}",
+                                          prices=prices_for(sym))
                 st.markdown(card["detail"])
+        price_view.render("port_pos", prices_for, trades)
 
     st.divider()
     st.subheader("Dziennik zdarzeń")
     if len(alerts):
-        for rec in alerts.sort_values("timestamp", ascending=False).head(15).to_dict("records"):
+        rows = alerts.sort_values("timestamp", ascending=False).head(15).to_dict("records")
+        for n, rec in enumerate(rows):
             e = humanize.event_line(rec)
-            st.markdown(f"{e['emoji']} &nbsp;`{e['time']}` &nbsp; {e['text']}")
+            sym = rec.get("symbol")
+            if sym:  # basket-level rebalances name no instrument; those stay text
+                key = f"port_ev_{n}_{sym}"
+                price_view.preview_button(f"{e['emoji']} `{e['time']}` {e['text']}", sym,
+                                          "port_ev", key=key,
+                                          at=rec.get("timestamp"), prices=prices_for(sym))
+                price_view.render("port_ev", prices_for, trades, item=key)
+            else:
+                st.markdown(f"{e['emoji']} &nbsp;`{e['time']}` &nbsp; {e['text']}")
     else:
         st.caption("Jeszcze nic się nie wydarzyło.")
 
@@ -258,15 +272,15 @@ def render() -> None:
     primary = pcfg.book_name if pcfg.book_name in books else names[0]
     book_dir = books[primary]
     state = _load_state(book_dir) or {}
-    equity_df = _load_jsonl(book_dir / "equity.jsonl")
-    trades = _load_jsonl(book_dir / "trades.jsonl")
-    alerts = _load_jsonl(book_dir / "alerts.jsonl")
+    equity_df = journals.load_jsonl(book_dir / "equity.jsonl")
+    trades = journals.load_jsonl(book_dir / "trades.jsonl")
+    alerts = journals.load_jsonl(book_dir / "alerts.jsonl")
 
     basket = ", ".join(f"{k} {v:.0%}" for k, v in pcfg.base_weights.items())
     st.caption(f"Koszyk: **{basket}** · rebalans co {pcfg.rebalance.cadence_days} dni "
                f"lub przy drift ≥ {pcfg.rebalance.drift_threshold_pct:.0f} pkt · "
                f"filtr trendu: {'włączony' if pcfg.trend.enabled else 'wyłączony'}")
-    _render_beginner(pcfg, state, equity_df, alerts)
+    _render_beginner(pcfg, state, equity_df, alerts, trades)
 
     # See the note in app.py: the mobile segmented control reruns the script, so the
     # expander has to be told to stay open once a panel has been picked.

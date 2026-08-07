@@ -27,7 +27,7 @@ from trademon.backtest.metrics import (
     time_in_market_pct,
 )
 from trademon.config import load_config
-from trademon.dashboard import humanize, layout
+from trademon.dashboard import humanize, journals, layout, price_view
 from trademon.data.storage import TIMEFRAME_MS
 from trademon.research.log import load_experiments
 
@@ -57,12 +57,7 @@ except ZoneInfoNotFoundError:
 def to_local(ts):
     """UTC/ISO timestamps -> local wall-clock (tz-naive), so Altair renders the
     same local time regardless of the browser's own timezone."""
-    out = pd.to_datetime(ts, utc=True)
-    if DISPLAY_TZ is None:
-        return out.dt.tz_localize(None) if hasattr(out, "dt") else out.tz_localize(None)
-    if hasattr(out, "dt"):
-        return out.dt.tz_convert(DISPLAY_TZ).dt.tz_localize(None)
-    return out.tz_convert(DISPLAY_TZ).tz_localize(None)
+    return humanize.to_local(ts, DISPLAY_TZ)
 
 
 # ---------- data access ----------
@@ -85,12 +80,6 @@ def discover_books() -> dict[str, Path]:
 def load_state(book_dir: Path) -> dict | None:
     path = book_dir / "state.json"
     return json.loads(path.read_text()) if path.exists() else None
-
-
-def load_jsonl(path: Path) -> pd.DataFrame:
-    if not path.exists() or path.stat().st_size == 0:
-        return pd.DataFrame()
-    return pd.DataFrame([json.loads(x) for x in path.read_text().splitlines() if x.strip()])
 
 
 def load_config_history() -> list[dict]:
@@ -325,29 +314,52 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
     st.divider()
 
     # 4) Co bot teraz trzyma
+    # Each instrument is clickable: the title opens its price chart below (hovering
+    # shows the numbers). The choice is kept in session state rather than a popover,
+    # which the 15s fragment refresh would keep closing — see price_view's docstring.
     st.subheader("Co bot teraz trzyma")
+    price_view.styles()
     positions = state.get("positions", {})
     last_close = state.get("last_close", {})
+
+    def prices_for(sym: str) -> pd.DataFrame:
+        return price_view.crypto_prices(sym, equity_df)
+
     if not positions:
         st.info("Nic — bot czeka na okazję. 🕊️")
     else:
+        st.caption("Kliknij instrument, aby zobaczyć jego kurs.")
         cols = st.columns(min(len(positions), 3))
         for i, (sym, pos) in enumerate(positions.items()):
             card = humanize.position_card(pos, last_close.get(sym))
             with cols[i % len(cols)]:
-                st.markdown(f"**{card['emoji']} {card['title']}**")
+                price_view.preview_button(f"**{card['emoji']} {card['title']}**", sym,
+                                          "crypto_pos", key=f"pos_{sym}",
+                                          prices=prices_for(sym))
                 tone = "green" if card["pnl"] > 0 else ("red" if card["pnl"] < 0 else "gray")
                 st.markdown(f":{tone}[{card['detail']}]")
+        price_view.render("crypto_pos", prices_for, trades, positions)
 
     st.divider()
 
     # 5) Dziennik zdarzeń
     st.subheader("Dziennik zdarzeń")
     if len(alerts):
+        st.caption("Kliknij zdarzenie, aby zobaczyć kurs w tamtym momencie.")
         rows = alerts.sort_values("timestamp", ascending=False).head(15).to_dict("records")
-        for rec in rows:
+        for n, rec in enumerate(rows):
             e = humanize.event_line(rec, DISPLAY_TZ)
-            st.markdown(f"{e['emoji']} &nbsp;`{e['time']}` &nbsp; {e['text']}")
+            sym = rec.get("symbol")
+            if sym:  # risk/config alerts carry no instrument — nothing to preview
+                key = f"ev_{n}_{sym}"
+                price_view.preview_button(f"{e['emoji']} `{e['time']}` {e['text']}", sym,
+                                          "crypto_ev", key=key,
+                                          at=rec.get("timestamp"), prices=prices_for(sym))
+                # inside the loop: the chart belongs under the clicked line, not
+                # under fifteen rows of other events where nobody looks for it
+                price_view.render("crypto_ev", prices_for, trades, positions, item=key)
+            else:
+                st.markdown(f"{e['emoji']} &nbsp;`{e['time']}` &nbsp; {e['text']}")
     else:
         st.caption("Jeszcze nic się nie wydarzyło.")
 
@@ -449,8 +461,8 @@ def tab_variants(books: dict[str, Path]) -> None:
     curves, metric_rows = [], []
     for name, bdir in books.items():
         state = load_state(bdir) or {}
-        eq_df = load_jsonl(bdir / "equity.jsonl")
-        trades = load_jsonl(bdir / "trades.jsonl")
+        eq_df = journals.load_jsonl(bdir / "equity.jsonl")
+        trades = journals.load_jsonl(bdir / "trades.jsonl")
         s = book_equity_series(eq_df)
         if len(s):
             curves.append(s.assign(wariant=name))
@@ -538,8 +550,8 @@ def tab_health(books: dict[str, Path]) -> None:
                    f"— {rs.get('detail', '')}")
 
     st.subheader("Ostatnie alerty")
-    frames = [load_jsonl(runtime / "alerts.jsonl")]
-    frames += [load_jsonl(bdir / "alerts.jsonl") for bdir in books.values()]
+    frames = [journals.load_jsonl(runtime / "alerts.jsonl")]
+    frames += [journals.load_jsonl(bdir / "alerts.jsonl") for bdir in books.values()]
     alerts = pd.concat([f for f in frames if len(f)], ignore_index=True) if any(
         len(f) for f in frames) else pd.DataFrame()
     if len(alerts):
@@ -567,9 +579,9 @@ def render_crypto() -> None:
     primary = cfg.primary_variant if cfg.primary_variant in books else names[0]
     book_dir = books[primary]
     state = load_state(book_dir) or {}
-    equity_df = load_jsonl(book_dir / "equity.jsonl")
-    trades = load_jsonl(book_dir / "trades.jsonl")
-    alerts = load_jsonl(book_dir / "alerts.jsonl")
+    equity_df = journals.load_jsonl(book_dir / "equity.jsonl")
+    trades = journals.load_jsonl(book_dir / "trades.jsonl")
+    alerts = journals.load_jsonl(book_dir / "alerts.jsonl")
 
     if len(names) > 1:
         st.caption(f"Twój portfel: **{primary}** (pozostałe warianty w Szczegółach)")
@@ -585,8 +597,8 @@ def render_crypto() -> None:
                            index=names.index(primary)) if len(names) > 1 else primary
         d = books[sel]
         s_state = load_state(d) or {}
-        s_eq = load_jsonl(d / "equity.jsonl")
-        s_tr = load_jsonl(d / "trades.jsonl")
+        s_eq = journals.load_jsonl(d / "equity.jsonl")
+        s_tr = journals.load_jsonl(d / "trades.jsonl")
         tab_metrics(s_eq, s_tr, s_state)
         panels = {
             "Analityka": lambda: tab_analytics(s_tr),

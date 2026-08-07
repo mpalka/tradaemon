@@ -82,6 +82,8 @@ Uruchamia **cztery serwisy**:
 Dane, modele i stan runtime montowane z `./data`, `./models`, `./runtime`.
 Każdy serwis ma własny dziennik (logs): `docker compose logs -f bot` itp.
 
+Wdrożenie na Synology NAS (build na NAS-ie, LAN-only): [docs/DEPLOY_SYNOLOGY.md](docs/DEPLOY_SYNOLOGY.md).
+
 ## Dashboard (localhost:8501)
 
 ### Ekran dla początkującego (domyślny widok)
@@ -93,6 +95,11 @@ Bez żargonu — wszystko po polsku:
 - **„Jak to szło"** — krzywa kapitału vs szara linia „kup i trzymaj"; przełącznik 7d / 30d / całość
 - **„Co bot trzyma"** — otwarte pozycje jako zdania (np. „kupił ETH za 100 $ — teraz +2 $")
 - **„Dziennik zdarzeń"** — oś czasu z ikonami (kupił, sprzedał, limit strat)
+- **Podgląd kursu** — instrumenty w obu tych sekcjach są klikalne: kliknięcie rozwija
+  **pod tym wierszem** wykres kursu z transakcjami bota (▲ kupno, ▼ sprzedaż), linią
+  ceny wejścia i — gdy otwarty z dziennika — znacznikiem chwili zdarzenia. Samo najechanie pokazuje dymek
+  z ceną i zmianą 24 h / 7 dni (wykresu na hover Streamlit nie potrafi bez własnego
+  komponentu JS). Wybór trzyma się w sesji, więc odświeżanie co 15 s go nie zamyka.
 - **„Szczegóły dla dociekliwych"** (zwinięte) — siedem zakładek technicznych z objaśnieniami
 
 ### Zakładki techniczne (pod expander)
