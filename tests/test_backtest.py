@@ -28,6 +28,21 @@ def test_backtest_no_signals_no_trades(cfg):
     assert result["summary"]["total_return_pct"] == pytest.approx(0.0)
 
 
+def test_timeout_rollover_replaces_timeout_exits(cfg):
+    df = make_ohlcv(2000)
+    plain = run_backtest(df, FakeBundle(prob=0.99), cfg, "BTC/USDT")
+    cfg.strategy.timeout_rollover = True
+    rolled = run_backtest(df, FakeBundle(prob=0.99), cfg, "BTC/USDT")
+
+    # the signal never drops below the threshold, so every would-be timeout
+    # extends instead of closing — only TP/SL exits remain
+    assert rolled["summary"]["rollovers"] > 0
+    assert "timeout" not in rolled["summary"].get("exits", {})
+    assert plain["summary"].get("exits", {}).get("timeout", 0) > 0
+    # fewer round trips -> fewer fees on the same bars
+    assert rolled["summary"]["fees_paid"] < plain["summary"]["fees_paid"]
+
+
 def test_report_contains_verdict(cfg):
     df = make_ohlcv(800)
     result = run_backtest(df, FakeBundle(prob=0.99), cfg, "BTC/USDT")

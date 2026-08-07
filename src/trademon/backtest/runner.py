@@ -6,7 +6,11 @@ Execution model (one position per symbol, long and optionally short):
 - entry at open of bar t+1 with taker fee + slippage (or a resting limit at
   close[t] in maker mode, which may expire unfilled),
 - exits: TP/SL barrier touched intra-bar (both touched -> SL, conservative)
-  or timeout after `horizon_bars` bars at that bar's close.
+  or timeout after `horizon_bars` bars at that bar's close. With
+  `strategy.timeout_rollover` a timeout whose side still signals above the
+  threshold extends instead (TP/SL rebased on that bar's close and ATR, fresh
+  deadline) — the free version of the close-and-reopen the engine would
+  otherwise do on the same bar.
 
 Short accounting is futures-style: margin equal to the entry notional is set
 aside, pnl = qty * (entry - exit) - fees. Real short execution requires a
@@ -77,7 +81,7 @@ def run_backtest(
     trades: list[dict] = []
     equity_curve = np.full(len(df), np.nan)
     cash_curve = np.full(len(df), np.nan)   # free cash per bar -> how much was idle
-    n_signals = n_fills = 0
+    n_signals = n_fills = n_rollovers = 0
 
     pos_qty = 0.0          # > 0 means a position is open (size is always positive)
     side = 1               # +1 long, -1 short
@@ -124,7 +128,14 @@ def run_backtest(
             elif reason == "sl":
                 exit_price = sl  # stop -> market order, stays taker
             elif t >= deadline:
-                reason, exit_price = "timeout", close[t]  # market order, taker
+                p_now = p_long[t] if side == 1 else p_short[t]
+                if (strat.timeout_rollover and not np.isnan(p_now)
+                        and p_now >= strat.prob_threshold and atr_v[t] > 0):
+                    tp, sl = set_barriers(close[t], atr_v[t], side)
+                    deadline = t + strat.horizon_bars
+                    n_rollovers += 1
+                else:
+                    reason, exit_price = "timeout", close[t]  # market order, taker
             if exit_price is not None:
                 if side == 1:  # closing a long = sell
                     fill = (maker_sell_fill if exit_maker else sell_fill)(
@@ -223,6 +234,7 @@ def run_backtest(
         result["round_trip_cost_pct"] = 2.0 * (costs.taker_fee + costs.slippage) * 100.0
     result["signals"] = n_signals
     result["fills"] = n_fills
+    result["rollovers"] = n_rollovers
     result["fill_rate_pct"] = (n_fills / n_signals * 100.0) if n_signals else 0.0
     result["direction"] = strat.direction if allow_short else "long"
     if len(trades_df) and "side" in trades_df:
@@ -265,7 +277,7 @@ def render_report(results: list[dict], cfg: Config) -> str:
                 f"in the market on {s.get('time_in_market_pct', 0):.0f}% of bars"
                 + _risked_suffix(s)
             ),
-            f"  exits: {s.get('exits', {})}",
+            f"  exits: {s.get('exits', {})}, rollovers: {s.get('rollovers', 0)}",
             (
                 f"  order style: {s.get('order_style', 'taker')}, "
                 f"direction: {s.get('direction', 'long')}, "

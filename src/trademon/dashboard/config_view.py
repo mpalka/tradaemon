@@ -33,6 +33,9 @@ from trademon.portfolio.config import _find_config_path as _portfolio_config_pat
 HOT = "⚡"
 RESTART = "🔄"
 
+# Booleans shown as a Polish on/off selectbox rather than a bare True/False.
+BOOL_CHOICES = ("trend.enabled", "strategy.timeout_rollover")
+
 
 @dataclass
 class Field:
@@ -71,6 +74,11 @@ CRYPTO_SECTIONS: dict[str, list[Field]] = {
         Field("strategy.horizon_bars", "Maksymalny czas trzymania (świece)", "int",
               "Po tylu świecach pozycja zamyka się niezależnie od wyniku.",
               min=1, max=500, step=1),
+        Field("strategy.timeout_rollover", "Przedłużanie po terminie", "choice",
+              "Gdy mija maksymalny czas trzymania, a model wciąż daje sygnał powyżej "
+              "progu, bot przedłuża pozycję (nowe widełki i termin) zamiast zamykać "
+              "i zaraz otwierać ją ponownie za podwójną prowizję.",
+              choices=["wyłączony", "włączony"]),
         Field("strategy.atr_period", "Okres ATR", "int",
               "Ile świec wstecz liczy się zmienność.", min=2, max=200, step=1),
         Field("strategy.direction", "Kierunek", "choice",
@@ -167,7 +175,7 @@ def _widget(f: Field, current: Any, key: str) -> Any:
                                help=f.help, key=key)
     if f.kind == "choice":
         choices = f.choices or []
-        if f.path == "trend.enabled":
+        if f.path in BOOL_CHOICES:
             current = "włączony" if current else "wyłączony"
         idx = choices.index(current) if current in choices else 0
         return st.selectbox(label, choices, index=idx, help=f.help, key=key)
@@ -184,7 +192,7 @@ def _parse(f: Field, raw: Any) -> Any:
         return int(raw)
     if f.kind == "float":
         return float(raw)
-    if f.path == "trend.enabled":
+    if f.path in BOOL_CHOICES:
         return raw == "włączony"
     return raw
 
@@ -358,7 +366,8 @@ def _render_variants(cfg_path: Path, runtime_dir: Path,
                    "Puste pole = wartość z sekcji wyżej. Zmiana listy wymaga restartu.")
         variants = effective.get("variants", []) or []
         cols = ["name", "prob_threshold", "tp_atr_mult", "sl_atr_mult",
-                "horizon_bars", "direction", "position_pct", "max_open_positions"]
+                "horizon_bars", "direction", "timeout_rollover",
+                "position_pct", "max_open_positions"]
         df = pd.DataFrame(variants)
         for c in cols:
             if c not in df:

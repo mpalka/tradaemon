@@ -42,7 +42,7 @@ RESTART_POLL_SECONDS = 10.0
 # (symbols, timeframe, warmup, the variant list) is baked into __init__ or the feed
 # and needs the restart handshake instead — see config_store.RESTART_FIELDS.
 HOT_STRATEGY_FIELDS = ("prob_threshold", "tp_atr_mult", "sl_atr_mult",
-                       "horizon_bars", "atr_period", "direction")
+                       "horizon_bars", "atr_period", "direction", "timeout_rollover")
 HOT_RISK_FIELDS = ("position_pct", "max_open_positions",
                    "daily_loss_limit_pct", "drawdown_alert_pct")
 HOT_COST_FIELDS = ("taker_fee", "maker_fee", "slippage_bps")
@@ -327,6 +327,8 @@ class Book:
         elif reason == "sl":
             price_hint = pos.sl
         elif now >= pos.deadline:
+            if self._maybe_rollover(symbol, pos, bar, now):
+                return
             reason, price_hint = "timeout", float(bar["close"])
         if price_hint is None:
             return
@@ -349,9 +351,60 @@ class Book:
         self.alert("trade_close", f"{symbol} zamknięto {pos.side} ({reason}) "
                    f"PnL {pnl:+.2f} USDT", now, symbol=symbol, pnl=pnl, reason=reason)
 
+    def _maybe_rollover(self, symbol: str, pos: Position, bar: dict,
+                        now: datetime) -> bool:
+        """Extend an expired position whose signal is still live, instead of closing.
+
+        Without this the deadline triggers a market close and — the signal still
+        being above threshold — a re-entry on the very same bar: a full round trip
+        of fees and slippage paid to keep holding what the book already held.
+        Rolling over is that close-and-reopen minus the costs: TP/SL rebased on the
+        current close and ATR, a fresh deadline, position and entry price kept.
+        On a kill-switch day the position still closes, because the reopen it
+        stands in for would have been blocked too.
+        """
+        strat = self.cfg.strategy
+        if not strat.timeout_rollover:
+            return False
+        if self.risk.kill_switch_active(now, self.equity()):
+            return False
+        view, _ = self._model_view(self.buffers.get(symbol, pd.DataFrame()))
+        if view is None:
+            return False
+        prob = view["p_long"] if pos.side == "long" else view["p_short"]
+        if prob is None or prob < strat.prob_threshold:
+            return False
+        close = float(bar["close"])
+        pos.tp = close + pos.sign * strat.tp_atr_mult * view["atr"]
+        pos.sl = close - pos.sign * strat.sl_atr_mult * view["atr"]
+        pos.deadline = now + self._bar_delta * strat.horizon_bars
+        log.info("[%s] %s: rolled over %s (p=%.3f)", self.name, symbol, pos.side, prob)
+        self.alert("trade_rollover",
+                   f"{symbol} przedłużono {pos.side} @ {close:.2f} (p={prob:.2f})",
+                   now, symbol=symbol, side=pos.side, prob=prob)
+        return True
+
     def _record_signal(self, symbol: str, reason: str, **extra) -> None:
         self.signals[symbol] = {"reason": reason,
                                 "threshold": self.cfg.strategy.prob_threshold, **extra}
+
+    def _model_view(self, buf: pd.DataFrame) -> tuple[dict | None, str]:
+        """The models' opinion of the last closed bar: probabilities and ATR,
+        or (None, why-not) while the features cannot be computed yet."""
+        strat = self.cfg.strategy
+        if len(buf) < strat.warmup_bars:
+            return None, "warmup"
+        features = compute_features(buf, strat.atr_period)
+        last = features.iloc[[-1]]
+        if last[self.bundles["long"].feature_columns].isna().any(axis=1).iloc[0]:
+            return None, "features_nan"
+        atr_now = float(compute_atr(buf, strat.atr_period).iloc[-1])
+        if not atr_now > 0:
+            return None, "no_atr"
+        p_long = float(self.bundles["long"].predict_proba(last)[0])
+        allow_short = strat.direction == "long_short" and "short" in self.bundles
+        p_short = float(self.bundles["short"].predict_proba(last)[0]) if allow_short else None
+        return {"p_long": p_long, "p_short": p_short, "atr": atr_now}, "ok"
 
     def _maybe_enter(self, symbol: str, buf: pd.DataFrame, bar: dict, now: datetime) -> None:
         strat = self.cfg.strategy
@@ -366,19 +419,12 @@ class Book:
             self._record_signal(symbol, "risk_blocked", detail=why)
             return
 
-        features = compute_features(buf, strat.atr_period)
-        last = features.iloc[[-1]]
-        if last[self.bundles["long"].feature_columns].isna().any(axis=1).iloc[0]:
-            self._record_signal(symbol, "features_nan")
+        view, why = self._model_view(buf)
+        if view is None:
+            self._record_signal(symbol, why)
             return
-        atr_now = float(compute_atr(buf, strat.atr_period).iloc[-1])
-        if not atr_now > 0:
-            self._record_signal(symbol, "no_atr")
-            return
-
-        p_long = float(self.bundles["long"].predict_proba(last)[0])
-        allow_short = strat.direction == "long_short" and "short" in self.bundles
-        p_short = float(self.bundles["short"].predict_proba(last)[0]) if allow_short else None
+        p_long, p_short, atr_now = view["p_long"], view["p_short"], view["atr"]
+        allow_short = p_short is not None
         side, prob = None, strat.prob_threshold
         if p_long >= prob:
             side, prob = "long", p_long

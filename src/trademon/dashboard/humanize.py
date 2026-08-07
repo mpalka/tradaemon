@@ -37,6 +37,7 @@ EXIT_PL = {
 ALERT_EMOJI = {
     "trade_open": "🟢",
     "trade_close": "🔁",
+    "trade_rollover": "⏩",
     "kill_switch": "🛑",
     "drawdown": "⚠️",
     "rebalance": "⚖️",

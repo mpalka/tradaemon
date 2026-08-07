@@ -79,6 +79,59 @@ def test_timeout_close(engine, cfg):
     assert trades and trades[-1]["exit_reason"] == "timeout"
 
 
+def _flat_bars(df: pd.DataFrame, pos, n: int) -> list[dict]:
+    """`n` bars glued to the last close, strictly inside the position's barriers,
+    so only the deadline (or a rollover) can act."""
+    last = df.iloc[-1]
+    price = float(last["close"])
+    return [{
+        "timestamp": last["timestamp"] + pd.Timedelta(minutes=i + 1),
+        "open": price, "high": min(price * 1.0001, pos.tp * 0.999),
+        "low": max(price * 0.9999, pos.sl * 1.001), "close": price, "volume": 5.0,
+    } for i in range(n)]
+
+
+def test_timeout_rollover_extends_instead_of_closing(engine, cfg):
+    cfg.strategy.timeout_rollover = True
+    df = make_ohlcv(cfg.strategy.warmup_bars + 5)
+    feed(engine, df)
+    pos = engine.positions["BTC/USDT"]
+    entry_price, deadline = pos.entry_price, pos.deadline
+
+    def n_trades() -> int:
+        path = engine.store.trades_path
+        return len(path.read_text().splitlines()) if path.exists() else 0
+
+    closed_before = n_trades()
+    for bar in _flat_bars(df, pos, cfg.strategy.horizon_bars + 1):
+        engine.on_candle("BTC/USDT", bar)
+
+    # still the same position (same entry), just with a pushed-out deadline
+    assert "BTC/USDT" in engine.positions
+    assert engine.positions["BTC/USDT"].entry_price == entry_price
+    assert engine.positions["BTC/USDT"].deadline > deadline
+    assert n_trades() == closed_before  # nothing was closed past the deadline
+
+    alerts = [json.loads(x) for x in engine.store.alerts_path.read_text().splitlines()]
+    rollovers = [a for a in alerts if a["kind"] == "trade_rollover"]
+    assert rollovers and rollovers[-1]["symbol"] == "BTC/USDT"
+
+
+def test_timeout_still_closes_when_signal_is_gone(engine, cfg):
+    cfg.strategy.timeout_rollover = True
+    df = make_ohlcv(cfg.strategy.warmup_bars + 5)
+    feed(engine, df)
+    pos = engine.positions["BTC/USDT"]
+    engine.bundles = {"long": FakeBundle(prob=0.0)}  # signal died while holding
+
+    for bar in _flat_bars(df, pos, cfg.strategy.horizon_bars + 1):
+        engine.on_candle("BTC/USDT", bar)
+        if "BTC/USDT" not in engine.positions:
+            break
+    trades = [json.loads(x) for x in engine.store.trades_path.read_text().splitlines()]
+    assert trades and trades[-1]["exit_reason"] == "timeout"
+
+
 def test_hot_reload_swaps_models_when_file_changes(engine, tmp_path, monkeypatch):
     import trademon.engine.loop as loop_mod
 
