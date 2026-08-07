@@ -196,34 +196,69 @@ działa i nie ma sensu szukać przyczyny w kodzie bota. Drugi sygnał: `ls -l` n
 Podgląd logów kontenera masz w Container Manager → *Kontener* → `trademon-bot-1`
 → *Dziennik*.
 
-### Gdy bot nie dosięga giełdy: DNS czy brak NAT?
+### Gdy bot nie dosięga giełdy — zmierz z wnętrza kontenera
 
-Objaw jest ten sam — `Temporary failure in name resolution` — a przyczyny dwie
-zupełnie różne. `EAI_AGAIN` znaczy „resolwer nie odpowiedział", więc dostaniesz
-go **także wtedy, gdy kontener nie ma w ogóle wyjścia na świat**: zapytanie do
-1.1.1.1 po prostu przepada. Ustawianie kolejnych resolwerów wtedy nic nie da.
+`Temporary failure in name resolution` (`EAI_AGAIN`) znaczy tylko tyle, że
+**resolwer nie odpowiedział**. Nie znaczy, że winny jest DNS: zapytanie, które
+nie ma jak wyjść, daje identyczny komunikat. To nas raz kosztowało pół nocy
+zmieniania resolwerów, gdy przyczyna była zupełnie gdzie indziej.
 
-Rozstrzygnij to zanim ruszysz konfigurację (wszystko przez SSH z kluczem, bez
-roota):
+**Nie wnioskuj z hosta ani z plików stanu** — kontener ma własną przestrzeń
+sieciową, więc działający `nslookup` na DSM nie mówi o niej nic. Wejdź do
+środka: Container Manager → *Kontener* → `trademon-bot-1` → *Terminal* (bez ssh,
+bez roota) i wklej to. Obraz to `python:3.12-slim`, więc bez `dig`, `ping`
+i `curl` — Python załatwia sprawę:
 
 ```bash
-ssh <nas> 'cat /etc/resolv.conf; python3 -c "import socket;print(socket.gethostbyname(\"api.binance.com\"))"; ip -4 -o addr show | grep docker'
+python3 - <<'EOF'
+import socket, struct, random
+
+def tcp(ip, port=443, t=5):
+    s = socket.socket(); s.settimeout(t)
+    try: s.connect((ip, port)); return "OK"
+    except Exception as e: return "BLAD: %s" % e
+    finally: s.close()
+
+def dns(server, name="google.com", t=3):
+    p = struct.pack(">HHHHHH", random.randint(0, 65535), 0x0100, 1, 0, 0, 0)
+    for part in name.split("."): p += bytes([len(part)]) + part.encode()
+    p += b"\x00" + struct.pack(">HH", 1, 1)
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(t)
+    try: s.sendto(p, (server, 53)); s.recvfrom(512); return "OK"
+    except Exception as e: return "BLAD: %s" % e
+    finally: s.close()
+
+print("1. TCP po samym IP, bez DNS  :", tcp("18.244.94.121"))
+print("2. DNS wprost do 1.1.1.1     :", dns("1.1.1.1"))
+print("3. DNS wprost do routera     :", dns("10.0.0.1"))
+print("4. DNS przez resolwer Dockera:", dns("127.0.0.11"))
+EOF
 ```
 
-- **Host nie rozwiązuje nazwy** → to naprawdę DNS. Sprawdź resolwer w Panelu
-  sterowania → Sieć.
-- **Host rozwiązuje, mostek `docker-*` ma adres `172.x.0.1` i jest UP, a kontener
-  i tak nie wychodzi** → to nie DNS, tylko **brak reguł NAT** dla sieci
-  kontenerów. Docker zakłada je przy starcie demona, a zmiana zapory DSM albo
-  aktualizacja potrafi wyczyścić `iptables` i zabrać je razem z resztą. Mostek
-  zostaje, adres zostaje, trasa zostaje — pakiety wychodzą i nic nie wraca.
-  Widać to po licznikach: `cat /sys/class/net/docker-<hash>/statistics/tx_packets`
-  rośnie, a połączenia i tak wygasają.
+| Wynik | Przyczyna |
+|---|---|
+| 1 pada | kontener nie ma żadnego wyjścia; DNS jest tylko pierwszą ofiarą |
+| 1 OK, 2–4 padają | **wychodzące UDP jest blokowane** — patrz niżej, to był nasz przypadek |
+| 1–3 OK, pada tylko 4 | wbudowany resolwer Dockera; ogranicz liczbę zapytań po stronie bota |
+| wszystko OK | trafiłeś w okno sprawności — powtórz kilka razy pod rząd |
 
-  **Lek:** zatrzymaj i uruchom pakiet *Container Manager* (Centrum pakietów, nie
-  sam projekt) — demon przy starcie odtwarza reguły. Jeśli to nie pomoże,
-  restart NAS-a. Przebudowa projektu **nie** naprawia tego, bo problem jest
-  poziom niżej niż compose.
+#### Zapora DSM a podsieć kontenerów (to był nasz przypadek)
+
+Profil zapory kończy się regułą **Deny All**, a wcześniejsza reguła Allow
+przepuszczała `172.17.0.1/255.255.255.0` — czyli **domyślny** mostek Dockera.
+Projekt pracuje w sieci `trademon_default` = `172.18.0.0/16`, więc do żadnej
+reguły Allow nie pasował i wpadał w Deny. Maska `255.255.255.0` jest przy tym za
+wąska nawet dla `172.17`, bo Docker rozdaje adresy z całego `/16`.
+
+Efekt był myląco łagodny: **ginęło samo UDP/53, TCP przechodziło**. Bot żył więc
+na trzymanych połączeniach keep-alive i psuł się dopiero, gdy musiał rozwiązać
+nazwę od nowa — co wyglądało jak migotanie łączności, nie jak blokada.
+
+**Lek:** Panel sterowania → Zabezpieczenia → Zapora → edytuj profil, i **ponad**
+końcowym Deny dodaj: Ports=All, Protocol=All, Source IP `172.16.0.0`, maska
+`255.240.0.0`, Action=Allow. Szeroko z rozmysłem — obejmuje
+`172.16.0.0–172.31.255.255`, więc przetrwa odtworzenie projektu, przy którym
+Docker bierze kolejną wolną podsieć. Regułę na `172.17` można wtedy usunąć.
 
 ## 5. Start kontenerów
 
