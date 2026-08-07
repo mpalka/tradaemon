@@ -2,9 +2,11 @@ services:
   bot:
     build: .
     command: python -m trademon.engine
+    # Classic string form: the extended `path:`/`required:` syntax needs
+    # Compose 2.20+, which Synology's Container Manager does not ship.
+    # Consequence: .env must exist — `cp .env.example .env` on a fresh checkout.
     env_file:
-      - path: .env
-        required: false
+      - .env
     volumes:
       - ./config:/app/config
       - ./data:/app/data
@@ -29,9 +31,11 @@ services:
   portfolio:
     build: .
     command: python -m trademon.portfolio
+    # Classic string form: the extended `path:`/`required:` syntax needs
+    # Compose 2.20+, which Synology's Container Manager does not ship.
+    # Consequence: .env must exist — `cp .env.example .env` on a fresh checkout.
     env_file:
-      - path: .env
-        required: false
+      - .env
     volumes:
       - ./config:/app/config
       - ./data:/app/data

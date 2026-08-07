@@ -67,6 +67,7 @@ używa sklearn `HistGradientBoostingClassifier`).
 ## Docker (OrbStack / Docker Desktop)
 
 ```bash
+cp .env.example .env   # musi istnieć, może zostać pusty
 docker compose up --build
 ```
 
