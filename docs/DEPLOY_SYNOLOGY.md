@@ -119,11 +119,16 @@ Prościej wysłać źródło tym samym kanałem co dane.
 Z Maca, z katalogu projektu:
 
 ```bash
-tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/trademon'
+COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/trademon'
 ```
 
 Lista jest jawna z rozmysłem: całe źródło waży ~1 MB, ale `.venv` obok niego
 718 MB. Przy `--exclude` łatwo o pomyłkę, przy wyliczeniu — nie.
+
+`COPYFILE_DISABLE=1` powstrzymuje `tar` z macOS przed dopisywaniem plików
+`._nazwa` — kopii rozszerzonych atrybutów. Nie psują builda (Python ich nie
+zaimportuje), ale zaśmiecają obraz i sprawiają, że porównanie źródła NAS-a z
+Makiem nie wychodzi na zero, co przy diagnozie kosztuje czas.
 
 Do builda wystarczy to, co `Dockerfile` kopiuje (`pyproject.toml`, `src`,
 `config`, `scripts`) plus `docker-compose.yml`. `README.md` i `docs` jadą dla
@@ -238,7 +243,7 @@ wystarcza) i przebudowa obrazu (GUI, bo wymaga roota — patrz krok 5).
 **1. Wyślij źródło.** Z Maca, po `git pull` u siebie:
 
 ```bash
-tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/trademon'
+COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/trademon'
 ```
 
 **2. Przebuduj obraz.** Container Manager → *Projekt* → `trademon` → *Akcja* →
