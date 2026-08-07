@@ -1,3 +1,5 @@
 """TraDaemon 👹💰 — ML-driven crypto scalping bot."""
 
-__version__ = "0.1.0"
+# The single source of truth for the version: pyproject reads it from here
+# (`[tool.hatch.version]`), so there is nothing to keep in sync by hand.
+__version__ = "0.1.1"

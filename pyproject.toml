@@ -1,6 +1,6 @@
 [project]
 name = "trademon"
-version = "0.1.0"
+dynamic = ["version"]
 description = "ML-driven crypto scalping bot with paper trading"
 requires-python = ">=3.12"
 dependencies = [
@@ -24,6 +24,9 @@ dev = ["pytest>=8", "ruff>=0.5"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/trademon/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/trademon"]

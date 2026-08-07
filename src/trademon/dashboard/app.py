@@ -17,7 +17,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from trademon import config_store
+from trademon import __version__, config_store
 from trademon.backtest.metrics import (
     avg_exposure_pct,
     max_drawdown,
@@ -625,6 +625,9 @@ def render_crypto() -> None:
 # The module selector lives OUTSIDE the auto-refreshing fragment: switching it must
 # trigger a full rerun (a widget inside a run_every fragment would drop the change).
 st.title("TraDaemon 👹💰")
+# Here rather than per module: the deploy on the NAS rebuilds the image from git, and this
+# is the only way to tell from the browser whether the running container is the fresh one.
+st.caption(f"wersja {__version__}")
 MODULES = ["Krypto-scalper", "Zarządca portfela", "Badania", "Ustawienia"]
 # segmented_control wraps onto several lines when the labels do not fit, where a
 # horizontal radio would overflow the viewport at 390px.
