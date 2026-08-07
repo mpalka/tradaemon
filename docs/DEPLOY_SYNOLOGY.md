@@ -166,32 +166,44 @@ lokalnej.
 **Wolisz swój router?** Podmień listę w `docker-compose.yml` na jego adres —
 `ssh <nas> 'cat /etc/resolv.conf'` pokaże, czym posługuje się sam NAS.
 
-**Sprawdzenie po starcie** (obraz to `python:3.12-slim`, więc bez `dig`, `ping`
-i `curl`):
+**Sprawdzenie po starcie — bez roota, samym SSH z kluczem.** Nie zaglądaj do
+kontenera (to wymaga `sudo`, patrz krok 5); zajrzyj do plików, które silnik
+zapisuje na dysku NAS-a:
 
 ```bash
-sudo docker compose exec bot getent hosts api.binance.com
+ssh <nas> 'python3 -c "import json;s=json.load(open(\"/volume1/docker/trademon/runtime/prog_050/state.json\"));print(s[\"updated_at\"], len(s[\"last_close\"]), \"par\")"'
 ```
 
-Ma wypisać adres IP. Jeśli milczy, DNS nadal nie działa i nie ma sensu szukać
-przyczyny w kodzie bota.
+Ma pokazać świeży czas i **10 par**. Zero par oznacza, że silnik nie dosięgnął
+giełdy i przewrócił się przed pierwszym pobraniem świec — czyli DNS nadal nie
+działa i nie ma sensu szukać przyczyny w kodzie bota. Drugi sygnał: `ls -l` na
+`runtime/prog_050/equity.jsonl` — jeśli `state.json` jest sprzed sekund, a
+`equity.jsonl` sprzed godzin, to trwa pętla restartów.
+
+Podgląd logów kontenera masz w Container Manager → *Kontener* → `trademon-bot-1`
+→ *Dziennik*.
 
 ## 5. Start kontenerów
 
-**SSH (najbardziej przewidywalne):**
+**Container Manager GUI — to jest droga, która działa.** Zakładka *Projekt* →
+*Utwórz* → wskaż folder z `docker-compose.yml` → build. Przy kolejnych zmianach
+kodu: *Projekt* → zaznacz projekt → *Akcja* → **Kompiluj**. To odpowiednik
+`docker compose up -d --build`; samo *Uruchom* **nie przebudowuje obrazu** i
+zostawia stary kod, co wygląda jak wdrożenie, które nic nie zmieniło.
 
-```bash
-cd /volume1/docker/trademon
-sudo docker compose up -d --build
-```
+**Dlaczego nie po SSH.** Kuszące jest `ssh <nas> 'sudo docker compose up -d
+--build'`, ale wykłada się dwa razy i za każdym razem inaczej:
 
-W nieinteraktywnym `ssh <nas> '<komenda>'` PATH jest okrojony i `sudo docker`
-kończy się `command not found` — użyj wtedy pełnej ścieżki
-`/usr/local/bin/docker` albo zaloguj się interaktywnie.
+1. W nieinteraktywnym `ssh <nas> '<komenda>'` PATH jest okrojony i `docker`
+   kończy się `command not found` — binarka leży w `/usr/local/bin/docker`.
+2. Nawet z pełną ścieżką `sudo` na DSM **żąda hasła** (`sudo -n` zwraca
+   „a password is required"), a socket `/var/run/docker.sock` należy do
+   `root:root` z prawami `srw-rw----`, więc bez roota nie ma dostępu. Konta w
+   grupie `administrators` to nie zmienia — nie ma tu grupy `docker`.
 
-**Container Manager GUI (wygodniejsze na co dzień):** zakładka *Projekt* →
-*Utwórz* → wskaż folder z `docker-compose.yml` → build. Pozwala
-startować/zatrzymywać/podglądać logi bez SSH przy kolejnych operacjach.
+Zostaje `ssh -t <nas>` i wpisanie hasła ręcznie, ale skoro i tak siadasz do
+klawiatury, GUI jest szybsze i mniej zawodne. Do **odczytu** SSH nadaje się
+świetnie i klucz wystarcza — patrz weryfikacja niżej.
 
 `docker-compose.yml` ma już `restart: unless-stopped` na każdym serwisie, więc
 po restarcie NAS-a kontenery wracają same — warto tylko zweryfikować w
@@ -220,13 +232,23 @@ Macu. Dwie opcje:
 
 ## 8. Aktualizacja aplikacji później
 
-Bez gita na NAS-ie aktualizacja to powtórzenie kroku 3 (wysyłka źródła) plus
-przebudowa. Z Maca, po `git pull` u siebie:
+Bez gita na NAS-ie aktualizacja to dwa kroki: wysyłka źródła (SSH, klucz
+wystarcza) i przebudowa obrazu (GUI, bo wymaga roota — patrz krok 5).
+
+**1. Wyślij źródło.** Z Maca, po `git pull` u siebie:
 
 ```bash
 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/trademon'
-ssh -t <nas> 'cd /volume1/docker/trademon && sudo docker compose up -d --build'
 ```
+
+**2. Przebuduj obraz.** Container Manager → *Projekt* → `trademon` → *Akcja* →
+**Kompiluj**. Nie *Uruchom* — to podniesie stary obraz i nic się nie zmieni.
+
+**3. Sprawdź, że naprawdę się przebudowało.** Otwórz `http://<nas>:8501` i
+przeczytaj numer wersji pod tytułem. Musi zgadzać się z `__version__` w
+`src/trademon/__init__.py` z tego wdrożenia. To jedyny wiarygodny dowód — `src/`
+jest wkompilowane w obraz (`COPY src` + `pip install .`), a nie zamontowane, więc
+świeże pliki na dysku NAS-a **nie** znaczą świeżego kodu w kontenerze.
 
 `config/`, `data/`, `models/`, `runtime/` są zamontowane z zewnątrz kontenera
 (bind mount), więc rebuild obrazu nigdy nie rusza historii. Uwaga: tar
