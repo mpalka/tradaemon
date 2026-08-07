@@ -66,3 +66,32 @@ def load_jsonl(path: Path) -> pd.DataFrame:
     if not path.exists() or path.stat().st_size == 0:
         return pd.DataFrame()
     return _parse_jsonl(str(path), _fingerprint(path))
+
+
+def records(df: pd.DataFrame) -> list[dict]:
+    """Rows as dicts, with absent fields absent — not present as NaN.
+
+    A journal holds several kinds of row in one file: `trade_open` carries a
+    symbol, `config` and `risk` alerts carry none. The DataFrame has to square
+    that into one rectangle, so it invents a `symbol` cell for the config row and
+    fills it with NaN. Plain `to_dict("records")` then hands the caller a dict
+    where `rec.get("symbol")` returns `nan` instead of `None` — and `nan` is
+    truthy, so the obvious `if sym:` guard passes and the symbol reaches code
+    that expects a string (`'float' object has no attribute 'replace'`).
+
+    Dropping the empty cells restores what the writer wrote and what `.get()`
+    callers assume. This is per-row on purpose: `dropna()` on the frame would
+    delete whole rows or columns, which is a different thing entirely.
+    """
+    return [{k: v for k, v in rec.items() if not _missing(v)}
+            for rec in df.to_dict("records")]
+
+
+def _missing(value) -> bool:
+    """NaN/NaT/None — the cells pandas invented. Scalars only, hence `is True`.
+
+    `pd.isna` returns an array for list- and dict-valued cells (a JSONL journal
+    may legitimately hold either), and `if` on an array raises. Comparing the
+    result to `True` keeps those cells, which is right: they are real values.
+    """
+    return value is None or pd.isna(value) is True

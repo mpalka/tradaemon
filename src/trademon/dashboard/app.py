@@ -346,7 +346,7 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
     st.subheader("Dziennik zdarzeń")
     if len(alerts):
         st.caption("Kliknij zdarzenie, aby zobaczyć kurs w tamtym momencie.")
-        rows = alerts.sort_values("timestamp", ascending=False).head(15).to_dict("records")
+        rows = journals.records(alerts.sort_values("timestamp", ascending=False).head(15))
         for n, rec in enumerate(rows):
             e = humanize.event_line(rec, DISPLAY_TZ)
             sym = rec.get("symbol")
@@ -559,7 +559,7 @@ def tab_health(books: dict[str, Path]) -> None:
         alert_cols = [c for c in ["timestamp", "kind", "message", "variant"] if c in alerts]
         if layout.is_mobile():
             # Alerts already carry a Polish sentence; the timeline reads better than a grid.
-            for rec in alerts.head(layout.max_cards() * 2).to_dict("records"):
+            for rec in journals.records(alerts.head(layout.max_cards() * 2)):
                 e = humanize.event_line(rec, DISPLAY_TZ)
                 st.markdown(f"{e['emoji']} &nbsp;`{e['time']}` &nbsp; {e['text']}")
         else:

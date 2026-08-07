@@ -119,3 +119,56 @@ def test_the_result_is_a_dataframe_even_when_empty(tmp_path):
     """Callers do `.empty`, `"close" not in df` and `df.copy()` on the result
     without checking the type first."""
     assert isinstance(journals.load_jsonl(tmp_path / "nope.jsonl"), pd.DataFrame)
+
+
+# ---------- records(): rows back as the writer wrote them ----------
+
+def test_a_field_no_row_has_is_absent_not_nan(tmp_path):
+    """The bug this exists for: the timeline does `if rec.get("symbol")` and then
+    treats the result as a string. A config alert has no symbol, but the frame
+    invents one as NaN — and NaN is truthy, so the guard passed and the panel
+    crashed with `'float' object has no attribute 'replace'`."""
+    path = tmp_path / "alerts.jsonl"
+    write_rows(path, [
+        {"timestamp": "2026-08-07T18:00:00+00:00", "kind": "trade_open",
+         "symbol": "BTC/USDT"},
+        {"timestamp": "2026-08-07T18:05:00+00:00", "kind": "config",
+         "message": "zmieniono próg"},
+    ])
+    opened, config = journals.records(journals.load_jsonl(path))
+
+    assert opened["symbol"] == "BTC/USDT"
+    assert "symbol" not in config
+    assert config.get("symbol") is None
+
+
+def test_a_null_written_on_purpose_is_dropped_too(tmp_path):
+    """An explicit `"symbol": null` means the same thing as omitting it, and
+    would trip the same `if sym:`-then-`sym.replace()` path if kept."""
+    path = tmp_path / "alerts.jsonl"
+    write_rows(path, [{"kind": "risk", "symbol": None}])
+    assert "symbol" not in journals.records(journals.load_jsonl(path))[0]
+
+
+def test_real_values_survive(tmp_path):
+    """Only the invented cells go. A genuine zero or an empty string is data —
+    falsy, but written on purpose."""
+    path = tmp_path / "alerts.jsonl"
+    write_rows(path, [{"kind": "trade_close", "symbol": "ETH/USDT",
+                       "pnl": 0.0, "reason": "", "prob": 0.61}])
+    rec = journals.records(journals.load_jsonl(path))[0]
+    assert rec == {"kind": "trade_close", "symbol": "ETH/USDT",
+                   "pnl": 0.0, "reason": "", "prob": 0.61}
+
+
+def test_a_list_valued_cell_is_kept(tmp_path):
+    """`pd.isna` answers element-wise for a list, and `if` on that array raises.
+    A rebalance alert naming several tickers must not blow up the timeline."""
+    path = tmp_path / "alerts.jsonl"
+    write_rows(path, [{"kind": "rebalance", "symbols": ["SPY", "TLT"]}])
+    rec = journals.records(journals.load_jsonl(path))[0]
+    assert rec["symbols"] == ["SPY", "TLT"]
+
+
+def test_an_empty_frame_yields_no_rows():
+    assert journals.records(pd.DataFrame()) == []

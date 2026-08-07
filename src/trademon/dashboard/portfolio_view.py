@@ -175,7 +175,7 @@ def _render_beginner(pcfg: PortfolioConfig, state: dict, equity_df: pd.DataFrame
     st.divider()
     st.subheader("Dziennik zdarzeń")
     if len(alerts):
-        rows = alerts.sort_values("timestamp", ascending=False).head(15).to_dict("records")
+        rows = journals.records(alerts.sort_values("timestamp", ascending=False).head(15))
         for n, rec in enumerate(rows):
             e = humanize.event_line(rec)
             sym = rec.get("symbol")
@@ -246,7 +246,7 @@ def _tab_health(state: dict, alerts: pd.DataFrame) -> None:
     if len(alerts):
         recent = alerts.sort_values("timestamp", ascending=False).head(30)
         if layout.is_mobile():
-            for rec in recent.head(layout.max_cards() * 2).to_dict("records"):
+            for rec in journals.records(recent.head(layout.max_cards() * 2)):
                 e = humanize.event_line(rec)
                 st.markdown(f"{e['emoji']} &nbsp;`{e['time']}` &nbsp; {e['text']}")
         else:
