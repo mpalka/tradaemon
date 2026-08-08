@@ -30,7 +30,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ValidationError
 
-from trademon.config import Config, deep_merge, load_raw_config, overrides_path
+from trademon.config import Config, deep_merge, load_config, load_raw_config, overrides_path
 
 HISTORY_FILENAME = "config_history.jsonl"
 RESTART_FLAG_FILENAME = "restart_requested"
@@ -305,3 +305,80 @@ def restart_requested_at(runtime_dir: Path) -> datetime | None:
         return datetime.fromisoformat(json.loads(path.read_text())["requested_at"])
     except (ValueError, KeyError, json.JSONDecodeError):
         return None
+
+
+# ---------- what the engine is actually enforcing ----------
+
+@dataclass
+class LiveDrift:
+    """One hot field where a running book disagrees with the file on disk."""
+    book: str
+    field: str          # dotted path, as in HOT_FIELDS
+    live: Any           # what the engine is trading on
+    on_disk: Any        # what the config screen shows
+    stuck: bool         # a candle has closed since the edit and it still disagrees
+
+
+def live_drift(cfg_path: Path, runtime_dir: Path) -> list[LiveDrift]:
+    """Compare each book's state.json against the config it ought to be running.
+
+    Two situations have to stay separate, because conflating them makes the warning
+    useless: a book that has not seen a candle since the edit is *waiting* — correct,
+    and on 4h candles that is hours — while a book that has seen one and still
+    disagrees is *stuck*. `last_candle_ts` holds each pair's last closed candle by its
+    open time, so requiring it to be later than the file's mtime is conservative: it
+    can only make the warning late, never wrong, which is the right bias here.
+
+    An mtime is good enough for *this* comparison, unlike in the engine's own watch:
+    getting it wrong shifts when a message appears, it cannot change what is traded.
+
+    Each book is compared against its own variant, because variants override these
+    fields deliberately — ryzyko_100 runs max_open_positions: 5 against a base of 3
+    and is not drifting.
+    """
+    cfg = load_config(cfg_path)
+    books = ({v.name: runtime_dir / v.name for v in cfg.variants} if cfg.variants
+             else {"default": runtime_dir})
+    stamps = [p.stat().st_mtime for p in (cfg_path, overrides_path(cfg_path)) if p.exists()]
+    edited_at = datetime.fromtimestamp(max(stamps), UTC) if stamps else None
+
+    out: list[LiveDrift] = []
+    for name, book_dir in books.items():
+        try:
+            state = json.loads((book_dir / "state.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        live = state.get("live_config")
+        if not live:
+            # An engine older than this field reports nothing. Without this guard every
+            # user would see a phantom warning between deploying and restarting.
+            continue
+        variant = next((v for v in (cfg.variants or []) if v.name == name), None)
+        want = (cfg.for_variant(variant) if variant else cfg).model_dump(mode="json")
+        stuck = _saw_a_candle_after(state, edited_at)
+        for dotted in sorted(HOT_FIELDS):
+            if dotted not in live:
+                continue          # forward compatibility: a newer engine, an older panel
+            on_disk = get_path(want, dotted)
+            if live[dotted] != on_disk:
+                out.append(LiveDrift(name, dotted, live[dotted], on_disk, stuck))
+    return out
+
+
+def _saw_a_candle_after(state: dict, edited_at: datetime | None) -> bool:
+    """Did this book close a candle after the config was last written?
+
+    A dead engine produces no new candles, so it stays in the calm "waiting" state
+    rather than being reported as stuck. That is right: "the engine is down" is the
+    bot-status panel's job, not this function's.
+    """
+    if edited_at is None:
+        return False
+    stamps = []
+    for raw in (state.get("last_candle_ts") or {}).values():
+        try:
+            ts = datetime.fromisoformat(raw)
+        except (TypeError, ValueError):
+            continue
+        stamps.append(ts if ts.tzinfo else ts.replace(tzinfo=UTC))
+    return bool(stamps) and max(stamps) > edited_at

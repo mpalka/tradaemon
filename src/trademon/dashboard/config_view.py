@@ -262,13 +262,46 @@ def _apply(cfg_path: Path, runtime_dir: Path, changes: dict,
     if not report.changed:
         st.info("Nic się nie zmieniło.")
         return
-    lines = "\n".join(f"- `{k}`: {old} → **{new}**" for k, (old, new) in report.applied.items())
-    st.success(f"Zapisano:\n{lines}")
+    # st.rerun() throws away everything this run has drawn, so a message written here
+    # is never painted — the save looked like a click into the void, which is what
+    # made a user undo a change that had in fact been saved. Hand it to the next run
+    # instead, the same way "restart_sent" already does.
+    st.session_state["config_saved"] = "\n".join(
+        f"- `{k}`: {old} → **{new}**" for k, (old, new) in report.applied.items())
+    st.session_state["config_saved_hot"] = not report.needs_restart
     if report.needs_restart:
         st.session_state["pending_restart"] = report.needs_restart
-    else:
-        st.info("⚡ Wchodzi w życie przy najbliższej świecy — bez restartu.")
     st.rerun()
+
+
+# ---------- what the engine really trades on ----------
+
+def _render_drift(cfg_path: Path, runtime_dir: Path) -> None:
+    """Say out loud when the engine and this screen disagree.
+
+    Without it, a book left behind on old parameters is indistinguishable from one
+    that adopted them — the screen shows the file either way. That silence is what
+    let „maksimum otwartych pozycji" sit at 5 while this form said 3.
+    """
+    try:
+        drift = config_store.live_drift(cfg_path, runtime_dir)
+    except ValidationError:
+        # A value hand-edited into the file can be valid YAML and still not a valid
+        # Config. The sections below survive that (effective_values falls back to the
+        # raw dict), and this diagnostic must not be the thing that takes down the very
+        # screen you would use to fix it.
+        return
+
+    if stuck := [d for d in drift if d.stuck]:
+        st.warning("Silnik handluje na innych ustawieniach, niż pokazuje ten ekran — "
+                   "a świeca, przy której powinien je przyjąć, już minęła.")
+        st.markdown("\n".join(
+            f"- **{d.book}** · `{d.field}`: silnik ma **{d.live}**, na dysku {d.on_disk}"
+            for d in stuck))
+        st.caption("Restart silnika wyrówna to na pewno — wróci z tego, co w pliku.")
+    elif drift:
+        st.info("⚡ Silnik przyjmie nowe ustawienia przy najbliższej świecy. "
+                "Do tego czasu handluje na poprzednich.")
 
 
 # ---------- restart handshake ----------
@@ -324,6 +357,11 @@ def render() -> None:
         st.success("Wysłano prośbę o restart. Silnik zejdzie w ciągu ~10 sekund "
                    "i wróci z nowymi ustawieniami.")
 
+    if saved := st.session_state.pop("config_saved", None):
+        st.success(f"Zapisano:\n{saved}")
+        if st.session_state.pop("config_saved_hot", False):
+            st.info("⚡ Wchodzi w życie przy najbliższej świecy — bez restartu.")
+
     cfg_path = config_path()
     runtime_dir = _runtime_dir()
 
@@ -337,6 +375,9 @@ def render() -> None:
                                  label_visibility="collapsed") or "Krypto-scalper"
 
     if scope == "Krypto-scalper":
+        # Crypto only: the portfolio loop is daily and has no hot-reload to lag behind,
+        # which the caption in the other branch already says.
+        _render_drift(cfg_path, runtime_dir)
         effective = config_store.effective_config(cfg_path)
         overrides = config_store.load_overrides(cfg_path)
         for title, fields in CRYPTO_SECTIONS.items():

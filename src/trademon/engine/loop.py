@@ -14,6 +14,7 @@ display without ever trading.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -126,12 +127,18 @@ class Book:
         self._bar_delta = timedelta(milliseconds=storage.TIMEFRAME_MS[cfg.exchange.timeframe])
         self._model_path = cfg.paths.models_dir / "model_long.joblib"
         self._model_mtime = self._current_model_mtime()
-        self._overrides_path = overrides_path(config_path())
-        self._overrides_mtime = self._current_overrides_mtime()
+        self._config_path = config_path()
+        self._overrides_path = overrides_path(self._config_path)
+        self._config_digest = self._config_fingerprint()
+        self._config_error_digest: str | None = None
 
     # ---------- models ----------
 
     def _current_model_mtime(self) -> float:
+        """An mtime is enough here, unlike for the config below: the model file is
+        megabytes (hashing it every candle would not be free), only refresh.py ever
+        replaces it, and nothing deletes it. The config file is tiny and "delete it"
+        is a documented user action — restoring a default."""
         return self._model_path.stat().st_mtime if self._model_path.exists() else 0.0
 
     def _maybe_reload_models(self) -> None:
@@ -146,8 +153,32 @@ class Book:
 
     # ---------- config ----------
 
-    def _current_overrides_mtime(self) -> float:
-        return self._overrides_path.stat().st_mtime if self._overrides_path.exists() else 0.0
+    def _config_fingerprint(self) -> str:
+        """Content hash of every file _fresh_variant_config() reads.
+
+        A watch is only sound when it covers all the inputs of the reload it gates.
+        The previous one watched an mtime on one of the two files and compared it
+        with `>`, which was blind in three ways that all end the same — the book
+        keeps trading on parameters the disk no longer holds, until someone
+        restarts the container:
+
+        * "restore default" on the last remaining override *deletes* the file, so
+          the mtime dropped to 0.0. Never greater than what we had, so the watch
+          went silent for good — for every field, not just the reverted one;
+        * two saves inside one mtime tick collapsed into one;
+        * any rewrite carrying an older or equal mtime (rsync, an editor, a
+          deploy) was ignored.
+
+        Hashing sidesteps the clock entirely. Both files are a few kB and this runs
+        a few dozen times per candle, so the read is free next to the YAML parse it
+        saves. config.yaml is in here too because it is the other half of what gets
+        merged: a hand edit to the baseline was previously unadoptable by design.
+        """
+        h = hashlib.sha256()
+        for path in (self._config_path, self._overrides_path):
+            h.update(path.read_bytes() if path.exists() else b"")
+            h.update(b"\0")   # separator, so two files cannot smear into one digest
+        return h.hexdigest()
 
     def _fresh_variant_config(self) -> Config | None:
         """Reload config.yaml + overrides and re-apply this book's variant overrides.
@@ -168,17 +199,32 @@ class Book:
         return fresh.for_variant(match)
 
     def _maybe_reload_config(self, now: datetime) -> None:
-        """Adopt hot config fields written by the dashboard. Mirrors the model
-        hot-reload above: watch an mtime, reload, never let a bad file stop trading."""
-        mtime = self._current_overrides_mtime()
-        if mtime <= self._overrides_mtime:
+        """Adopt hot config fields written by the dashboard (or by hand). Reload on a
+        content change, never let a bad file stop trading, and never let a reload that
+        failed look like one that finished."""
+        digest = self._config_fingerprint()
+        if digest == self._config_digest:
             return
-        self._overrides_mtime = mtime
         try:
             fresh = self._fresh_variant_config()
         except Exception:
-            log.exception("[%s] config reload failed, keeping current config", self.name)
+            # The digest is deliberately not recorded here. A reload that raised
+            # adopted nothing, and marking its content as handled would freeze the
+            # book on the old parameters until a restart — which is exactly what the
+            # old watch did by recording before it tried. So: retry next candle, but
+            # complain only once per distinct broken file. Ten symbols x four books
+            # would otherwise put forty tracebacks per bar into a log that Synology
+            # does not rotate.
+            if digest != self._config_error_digest:
+                self._config_error_digest = digest
+                log.exception("[%s] config reload failed, keeping current config", self.name)
             return
+        self._config_error_digest = None
+        # Recorded here rather than after the field diff below: a reload that read the
+        # files and found nothing hot to change is *done* with that content. Recording
+        # only on an adopted change would re-parse both YAMLs on every candle forever
+        # after a save that touched restart-only fields.
+        self._config_digest = digest
         if fresh is None:
             return
 
@@ -262,6 +308,20 @@ class Book:
         log.info("[%s] restored: cash=%.2f, open positions: %s",
                  self.name, self.cash, list(self.positions) or "none")
 
+    def live_config(self) -> dict:
+        """The hot parameters this book is enforcing right now, keyed by dotted path.
+
+        The panel reads config off disk; until this existed there was nothing to check
+        that against, so a book stuck on old parameters looked exactly like one that
+        had adopted them. Keys match config_store.HOT_FIELDS so the comparison is a
+        plain dict diff with no translation table in between — a test welds the two
+        lists together, because a field added to one and not the other would quietly
+        stop being checked.
+        """
+        return ({f"strategy.{f}": getattr(self.cfg.strategy, f) for f in HOT_STRATEGY_FIELDS}
+                | {f"risk.{f}": getattr(self.cfg.risk, f) for f in HOT_RISK_FIELDS}
+                | {f"costs.{f}": getattr(self.cfg.costs, f) for f in HOT_COST_FIELDS})
+
     def persist(self, now: datetime) -> None:
         eq = self.equity()
         self.store.save_state({
@@ -279,6 +339,7 @@ class Book:
             "signals": self.signals,
             "positions": {s: p.to_json() for s, p in self.positions.items()},
             "risk": self.risk.snapshot(),
+            "live_config": self.live_config(),
             "kill_switch": self.risk.kill_switch_active(now, eq),
         })
 

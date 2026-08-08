@@ -3,6 +3,30 @@
 Najnowsze na górze. Numer wersji z tego pliku musi zgadzać się z `__version__`
 w `src/trademon/__init__.py` — pilnuje tego `tests/test_version.py`.
 
+## 0.1.7 — 2026-08-08
+
+- **Zmiana ustawień w panelu naprawdę dociera do silnika.** Przywrócenie wartości
+  domyślnej kasuje `config.overrides.yaml` (nie ma już czego nadpisywać), a czujnik
+  patrzył wyłącznie na datę modyfikacji tego pliku: zniknięcie dawało „0", czyli
+  nigdy nie „nowszy". Bot do końca życia kontenera handlował więc na poprzednich
+  parametrach, choć panel pokazywał już nowe — w praktyce „maksimum otwartych
+  pozycji" wróciło na 3, a bot dalej otwierał 5, czyli 50% zamiast 30% ekspozycji.
+  Silnik porównuje teraz **treść** `config.yaml` i nakładki, więc widzi każdą
+  zmianę: skasowanie pliku, dwa zapisy w tej samej sekundzie, wgranie starszej
+  wersji — a także ręczną poprawkę w samym `config.yaml`, której wcześniej nie
+  umiał przyjąć.
+- Nieudany odczyt konfiguracji nie jest już zapamiętywany jako załatwiony. Silnik
+  odhaczał plik, *zanim* spróbował go wczytać, więc jeden pechowy odczyt zamrażał
+  księgę na starych ustawieniach aż do restartu.
+- **Panel potwierdza zapis.** Komunikat „Zapisano…" ginął w przeładowaniu strony
+  zaraz po kliknięciu, więc zapisanie zmiany wyglądało identycznie jak kliknięcie
+  w próżnię. Teraz przeżywa przeładowanie tak samo jak potwierdzenie restartu.
+- **Widać, czym silnik naprawdę handluje.** `state.json` zapisuje wartości
+  parametrów, które księga w tej chwili egzekwuje, a ekran ustawień ostrzega, gdy
+  silnik rozjechał się z dyskiem. Ostrzeżenie czeka na świecę, przy której zmiana
+  powinna była wejść, i porównuje każdą księgę z jej własnym wariantem — żeby nie
+  straszyć zaraz po zapisaniu ani nie mylić `ryzyko_100` z awarią.
+
 ## 0.1.6 — 2026-08-08
 
 - Dziennik zdarzeń **sam domyka swoje alarmy**. Gdy bot odzyska łączność, dopisuje
