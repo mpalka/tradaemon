@@ -10,7 +10,7 @@ są o **zachowaniu**: co każdy komponent robi w kolejnych minutach, dniach i ty
 i co robi w przypadkach, w których nic ciekawego się nie dzieje — bo to jest jego
 domyślny stan.
 
-Wersja kodu, którą opisuje ten dokument: `0.1.8`.
+Wersja kodu, którą opisuje ten dokument: `0.1.9`.
 
 ---
 
@@ -173,12 +173,30 @@ prawdopodobieństwo ≥ `prob_threshold`. Każde „nie" ląduje w `signals[symb
 powodem (`warmup`, `risk_blocked`, `below_threshold`, `in_position`, `features_nan`,
 `no_atr`) — to jest źródło zakładki „Model: dlaczego nie handluje".
 
-**Wyjście**: TP, SL albo timeout po `horizon_bars`. Timeout ma wyjątek —
-`_maybe_rollover`: jeśli deadline mija, a sygnał wciąż jest powyżej progu, pozycja
-zostaje **przedłużona** (nowe TP/SL od bieżącego ATR, nowy deadline) zamiast zostać
-zamknięta i natychmiast otwarta na tej samej świecy za podwójną prowizję i poślizg.
-Na dniu z aktywnym kill-switchem rollover nie działa — bo ponowne wejście, które
-zastępuje, też byłoby zablokowane.
+**Wyjście**: TP, SL albo timeout po `horizon_bars`. Timeout ma wyjątek
+(`_maybe_rollover`, flaga `strategy.rollover`): jeśli deadline mija, a sygnał wciąż
+jest powyżej progu, pozycja zostaje **przedłużona** — nowe TP/SL od bieżącego ATR,
+nowy deadline — zamiast zostać zamknięta i natychmiast otwarta na tej samej świecy za
+podwójną prowizję i poślizg. Decyduje jawny rachunek, nie sam typ wyjścia:
+
+```
+edge = kierunek × (cena_wyjścia − cena_zamknięcia_świecy)   ile warte jest wyjście tutaj
+przedłuż  ⟺  edge ≤ koszt rundy (2 × prowizja + 2 × poślizg)
+```
+
+Przy timeoucie obie ceny to zamknięcie tej samej świecy, więc `edge` = 0 i warunek jest
+spełniony zawsze. **Take-profit mimo to nie kwalifikuje się nigdy** — i to jest
+najciekawszy wynik w tym module. Rozszerzenie przedłużania na TP wyglądało w backteście
+rewelacyjnie (średni wynik +146,6% → **+182,8%** na 5,5 roku i dziesięciu parach, każda
+para na plusie), ale TP wykrywamy z maksimum świecy: to dotknięcie **wewnątrz** świecy,
+rozliczane po cenie bariery, czyli transakcja, która zaszła, zanim świeca się domknęła.
+Rezygnacja z niej po zobaczeniu, gdzie świeca zamknęła, jest czytaniem z przyszłości —
+i punktuje jak czytanie z przyszłości. Uczciwa wersja, ograniczona do timeoutu, daje
++146,56% → +146,67% i 18 USDT mniej prowizji. Trzysta razy mniej, i tyle jest prawdą.
+
+Stop-loss nie przedłuża nigdy: to porzucenie limitu ryzyka, nie oszczędność na
+prowizji. Na dniu z aktywnym kill-switchem rollover też nie działa — bo ponowne
+wejście, które zastępuje, też byłoby zablokowane.
 
 ### 3.7 Ryzyko (`risk/manager.py`)
 
@@ -750,6 +768,10 @@ scripts/   download_data, train, backtest, refresh, portfolio_backtest,
 - **Nie wybiera zwycięskiego okna.** Raporty pokazują wszystkie okna, także te złe.
 - **Nie modeluje kosztu funding** przy shortach na krypto (moduł 3 wprost to zastrzega)
   ani nie koryguje **błędu przetrwania** w uniwersum par.
+- **Nie udaje, że rozliczenie TP jest pewne.** Silnik budzi się wyłącznie na zamknięciu
+  świecy, a mimo to rozlicza take-profit po cenie bariery — zakładając zlecenie, które
+  wykonało się wewnątrz świecy. To założenie optymistyczne i dotyczy całej dotychczasowej
+  historii pomiarów; jest zapisane jako otwarta sprawa, a nie zamiecione pod dywan.
 - **Nie chroni panelu logowaniem** — jest przeznaczony na sieć lokalną. `auth.py`
   istnieje po to, żeby to kiedyś zmienić w jednym miejscu.
 - **Nie wysyła prawdziwych zleceń bez świadomej zmiany** `mode: live` w konfiguracji
