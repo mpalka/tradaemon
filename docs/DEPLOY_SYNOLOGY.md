@@ -264,9 +264,14 @@ Docker bierze kolejną wolną podsieć. Regułę na `172.17` można wtedy usuną
 
 **Container Manager GUI — to jest droga, która działa.** Zakładka *Projekt* →
 *Utwórz* → wskaż folder z `docker-compose.yml` → build. Przy kolejnych zmianach
-kodu: *Projekt* → zaznacz projekt → *Akcja* → **Kompiluj**. To odpowiednik
-`docker compose up -d --build`; samo *Uruchom* **nie przebudowuje obrazu** i
-zostawia stary kod, co wygląda jak wdrożenie, które nic nie zmieniło.
+kodu: *Projekt* → zaznacz projekt → **Zatrzymaj** → *Akcja* → **Kompiluj** →
+*Uruchom*. To odpowiednik `docker compose up -d --build`; samo *Uruchom*
+**nie przebudowuje obrazu** i zostawia stary kod, co wygląda jak wdrożenie,
+które nic nie zmieniło.
+
+Zatrzymanie nie jest opcjonalne: na działającym projekcie GUI nie daje
+przebudować obrazu. Kolejność stop → kompiluj → uruchom jest więc pełną
+procedurą, a nie ostrożnościowym dodatkiem.
 
 **Dlaczego nie po SSH.** Kuszące jest `ssh <nas> 'sudo docker compose up -d
 --build'`, ale wykłada się dwa razy i za każdym razem inaczej:
@@ -309,28 +314,56 @@ Macu. Dwie opcje:
 
 ## 8. Aktualizacja aplikacji później
 
-Bez gita na NAS-ie aktualizacja to dwa kroki: wysyłka źródła (SSH, klucz
-wystarcza) i przebudowa obrazu (GUI, bo wymaga roota — patrz krok 5).
+Bez gita na NAS-ie aktualizacja to wysyłka źródła (SSH, klucz wystarcza) i
+przebudowa obrazu (GUI, bo wymaga roota — patrz krok 5). Poniżej cztery kroki,
+bo dwa środkowe łatwo wykonać w sposób, który wygląda na udany i nie jest.
 
-**1. Wyślij źródło.** Z Maca, po `git pull` u siebie:
+**1. Sprawdź, czy nie wyślesz cudzych ustawień.**
+
+```bash
+ls config/*.overrides.yaml
+```
+
+Ten plik pisze panel — i ten na NAS-ie żyje własnym życiem. Tar go nie kasuje,
+ale **nadpisuje**, jeśli masz lokalną kopię, więc ustawienia zapisane z panelu
+na NAS-ie cofną się do tego, co akurat leży na Macu. Raz nas to kosztowało
+przywrócenie limitu pozycji, który przed chwilą został z panelu zdjęty. Jeśli
+lokalna kopia jest tylko pozostałością po zabawie u siebie — skasuj ją przed
+wysyłką.
+
+**2. Wyślij źródło.** Z Maca, po `git pull` u siebie:
 
 ```bash
 COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/trademon'
 ```
 
-**2. Przebuduj obraz.** Container Manager → *Projekt* → `trademon` → *Akcja* →
-**Kompiluj**. Nie *Uruchom* — to podniesie stary obraz i nic się nie zmieni.
+**3. Przebuduj obraz.** Container Manager → *Projekt* → `trademon` →
+**Zatrzymaj** → *Akcja* → **Kompiluj** → *Uruchom*. Zatrzymanie jest wymagane:
+na działającym projekcie GUI nie pozwoli przebudować obrazu. Samo *Uruchom* bez
+*Kompiluj* podniesie stary obraz i nic się nie zmieni.
 
-**3. Sprawdź, że naprawdę się przebudowało.** Otwórz `http://<nas>:8501` i
-przeczytaj numer wersji pod tytułem. Musi zgadzać się z `__version__` w
-`src/trademon/__init__.py` z tego wdrożenia. To jedyny wiarygodny dowód — `src/`
-jest wkompilowane w obraz (`COPY src` + `pip install .`), a nie zamontowane, więc
-świeże pliki na dysku NAS-a **nie** znaczą świeżego kodu w kontenerze.
+**4. Sprawdź, że naprawdę się przebudowało.** `src/` jest wkompilowane w obraz
+(`COPY src` + `pip install .`), a nie zamontowane, więc świeże pliki na dysku
+NAS-a **nie** znaczą świeżego kodu w kontenerze.
+
+Numer wersji pod tytułem na `http://<nas>:8501` jest pierwszym sprawdzeniem, ale
+**dowodzi tylko tego, że świeży jest kontener panelu**. Silnik to osobny
+kontener i potrafi przy niedokończonym wdrożeniu chodzić dalej na starym
+obrazie — z zewnątrz wygląda to na udaną aktualizację. Silnik pytaj osobno:
+
+```bash
+ssh <nas> 'python3 -c "import json;s=json.load(open(\"/volume1/docker/trademon/runtime/prog_050/state.json\"));print(s[\"updated_at\"]);print(s.get(\"live_config\",\"BRAK — silnik nadal stary\"))"'
+```
+
+Świeży `updated_at` **i** obecny `live_config` (klucz istnieje od 0.1.7) znaczą,
+że nowy silnik naprawdę wstał. Świeży `updated_at` bez `live_config` to obraz
+sprzed aktualizacji, który wciąż handluje.
 
 `config/`, `data/`, `models/`, `runtime/` są zamontowane z zewnątrz kontenera
-(bind mount), więc rebuild obrazu nigdy nie rusza historii. Uwaga: tar
-**nadpisuje** bazowe `config/*.yaml` wersją z Maca, ale nie kasuje
-`config/*.overrides.yaml` — ustawienia zapisane przez panel na NAS-ie zostają.
+(bind mount), więc rebuild obrazu nigdy nie rusza historii. Uwaga na `config/`:
+tar **nadpisuje** każdy plik, który ma u siebie, więc bazowe `config/*.yaml`
+przyjadą z Maca. Nadpisania z panelu przetrwają tylko wtedy, gdy nie masz ich
+lokalnej kopii — dlatego krok 1 każe sprawdzić to przed wysyłką, a nie po.
 
 ## 9. Backup
 
