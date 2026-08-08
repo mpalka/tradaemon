@@ -3,6 +3,16 @@
 Najnowsze na górze. Numer wersji z tego pliku musi zgadzać się z `__version__`
 w `src/trademon/__init__.py` — pilnuje tego `tests/test_version.py`.
 
+## 0.1.8 — 2026-08-08
+
+- **Wykres kursu pokazuje pozycję, którą bot trzyma teraz** — jako zielone kółko
+  w miejscu i czasie wejścia, obok trójkątów transakcji zakończonych. Wcześniej
+  znaczniki brał wyłącznie z `trades.jsonl`, do którego silnik dopisuje wiersz
+  dopiero przy **zamknięciu** pozycji, więc wykres opowiadał historię odwrotną do
+  kafelka nad nim: przy LINK (kupionym i nigdy nie sprzedanym) nie było żadnych
+  znaczników, a przy LTC i ADA ostatnim znacznikiem było czerwone wyjście —
+  z tej samej świecy, w której bot natychmiast wszedł ponownie.
+
 ## 0.1.7 — 2026-08-08
 
 - **Zmiana ustawień w panelu naprawdę dociera do silnika.** Przywrócenie wartości

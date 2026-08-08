@@ -38,7 +38,7 @@ RANGES = {"7 dni": 7, "30 dni": 30, "90 dni": 90}
 DEFAULT_RANGE = "30 dni"
 PRICE_COLUMNS = ["timestamp", "close"]
 MARK_COLUMNS = ["timestamp", "price", "typ"]
-ENTRY, EXIT = "wejście", "wyjście"
+ENTRY, EXIT, HELD = "wejście", "wyjście", "trzyma nadal"
 
 _KEY = "price_preview"   # {"symbol", "section", "at"} or absent
 
@@ -137,12 +137,46 @@ def trade_points(trades: pd.DataFrame | None, symbol: str,
         return empty
 
     out = pd.concat(parts, ignore_index=True).dropna(subset=["timestamp", "price"])
+    return _in_window(out, start, end)
+
+
+def _in_window(marks: pd.DataFrame, start=None, end=None) -> pd.DataFrame:
+    """Clip marks to the visible range and put them in time order."""
+    out = marks.copy()
     out["timestamp"] = pd.to_datetime(out["timestamp"], utc=True)
     if start is not None:
         out = out[out["timestamp"] >= pd.to_datetime(start, utc=True)]
     if end is not None:
         out = out[out["timestamp"] <= pd.to_datetime(end, utc=True)]
     return out.sort_values("timestamp").reset_index(drop=True)
+
+
+def open_position_point(pos: dict | None, start=None, end=None) -> pd.DataFrame:
+    """The position the bot is holding *right now*, which no journal row describes.
+
+    The scalper journals a round trip only once it closes, so a position still
+    open is absent from `trades.jsonl` entirely — and the chart, built from that
+    journal alone, told the opposite of the card above it: LINK held since the 8th
+    drew no marks at all, while LTC and ADA ended on a red exit triangle. Worse,
+    that exit and the re-entry that followed it landed on the same candle (the
+    close-and-reopen the timeout used to force), so the picture showed the half of
+    the manoeuvre that looks like leaving and hid the half that came back.
+
+    `state.json` has what the journal lacks — `entry_time` and `entry_price` from
+    `Position.to_json` — and this turns it into the same (timestamp, price, typ)
+    shape `trade_points` produces, so the two simply concatenate. Missing or
+    unparsable fields yield an empty frame rather than an exception: this is on
+    the panel's drawing path, where a broken chart is worse than a bare one.
+    """
+    empty = pd.DataFrame(columns=MARK_COLUMNS)
+    if not pos or pos.get("entry_time") is None or pos.get("entry_price") is None:
+        return empty
+    try:
+        row = pd.DataFrame({"timestamp": [pd.to_datetime(pos["entry_time"], utc=True)],
+                            "price": [float(pos["entry_price"])], "typ": HELD})
+    except (ValueError, TypeError):
+        return empty
+    return _in_window(row, start, end)
 
 
 # ---------- price sources ----------
@@ -255,8 +289,12 @@ def _chart(prices: pd.DataFrame, marks: pd.DataFrame, entry_price: float | None,
     if len(marks):
         pts = marks.copy()
         pts["timestamp"] = humanize.to_local(pts["timestamp"], DISPLAY_TZ)
-        scale = alt.Scale(domain=[ENTRY, EXIT], range=[GOOD, BAD])
-        shapes = alt.Scale(domain=[ENTRY, EXIT], range=["triangle-up", "triangle-down"])
+        scale = alt.Scale(domain=[ENTRY, EXIT, HELD], range=[GOOD, BAD, GOOD])
+        # A circle for the open position rather than a third triangle: after a
+        # close-and-reopen it lands on the same candle as the exit, a tenth of a
+        # percent away in price, and two triangles there would read as one smudge.
+        shapes = alt.Scale(domain=[ENTRY, EXIT, HELD],
+                           range=["triangle-up", "triangle-down", "circle"])
         layers.append(alt.Chart(pts).mark_point(size=80, filled=True, opacity=0.9).encode(
             x=alt.X("timestamp:T"), y=alt.Y("price:Q"),
             color=alt.Color("typ:N", title=None, scale=scale, legend=layout.legend()),
@@ -308,12 +346,21 @@ def render(section: str, prices_for: Callable[[str], pd.DataFrame],
             return
 
         pos = (positions or {}).get(symbol) or {}
-        marks = trade_points(trades, symbol, win["timestamp"].iloc[0],
-                             win["timestamp"].iloc[-1])
+        first, last = win["timestamp"].iloc[0], win["timestamp"].iloc[-1]
+        # Closed round trips and the position still open are two sources for one
+        # picture; drawing only the first was what made the chart contradict the
+        # card above it.
+        held = open_position_point(pos, first, last)
+        marks = pd.concat([trade_points(trades, symbol, first, last), held],
+                          ignore_index=True).sort_values("timestamp")
         st.altair_chart(_chart(win, marks, pos.get("entry_price"), at), width="stretch")
 
         change = (float(win["close"].iloc[-1]) / float(win["close"].iloc[0]) - 1.0) * 100.0
         note = "Trójkąty to transakcje bota: ▲ kupno, ▼ sprzedaż. " if len(marks) else ""
+        # Only explain the circle when one is on screen — a legend for a mark that
+        # is not there reads as a mark the reader failed to find.
+        if len(held):
+            note += "Kółko to pozycja, którą bot **nadal trzyma**. "
         st.caption(f"Kurs samego instrumentu: **{change:+.1f}%** w wybranym zakresie "
                    f"(to nie jest wynik bota — on trzymał tylko część konta i tylko "
                    f"przez część tego czasu). {note}")

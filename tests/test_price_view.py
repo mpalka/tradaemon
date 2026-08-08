@@ -167,6 +167,53 @@ def test_trade_points_without_a_journal():
     assert pv.trade_points(pd.DataFrame(), "BTC/USDT").empty
 
 
+# ---------- the position still open ----------
+#
+# The scalper journals a round trip only when it closes, so what the bot is
+# holding right now lives in state.json and nowhere else. Drawing the journal
+# alone made the chart contradict the card above it.
+
+def test_a_held_position_with_no_closed_trades_still_gets_a_mark():
+    """The LINK case: bought and never sold, so the journal has nothing at all
+    and the chart came out completely bare."""
+    pos = {"entry_time": "2026-08-08T00:00:00+00:00", "entry_price": 8.26}
+    pts = pv.open_position_point(pos)
+    assert list(pts["typ"]) == [pv.HELD]
+    assert list(pts["price"]) == [8.26]
+
+
+def test_a_held_position_follows_the_exit_it_was_reopened_after():
+    """The LTC case: the timeout closed and reopened on one candle, so the last
+    thing drawn was a red exit triangle for a pair the bot was still holding."""
+    trades = pd.DataFrame([{
+        "symbol": "LTC/USDT", "entry_time": "2026-08-04T20:00:00+00:00",
+        "exit_time": "2026-08-06T20:00:00+00:00",
+        "entry_price": 44.86, "exit_price": 45.55,
+    }])
+    pos = {"entry_time": "2026-08-06T20:00:00+00:00", "entry_price": 45.46}
+    marks = pd.concat([pv.trade_points(trades, "LTC/USDT"),
+                       pv.open_position_point(pos)], ignore_index=True)
+    marks = marks.sort_values("timestamp")
+    assert list(marks["typ"]) == [pv.ENTRY, pv.EXIT, pv.HELD]
+    assert marks["typ"].iloc[-1] == pv.HELD   # the story no longer ends on an exit
+
+
+def test_a_held_position_outside_the_window_is_not_drawn():
+    pos = {"entry_time": "2026-01-01T00:00:00+00:00", "entry_price": 40000.0}
+    assert pv.open_position_point(pos, start="2026-06-01T00:00:00+00:00",
+                                  end="2026-08-01T00:00:00+00:00").empty
+
+
+def test_no_position_or_a_broken_one_draws_nothing():
+    """Never raises: this runs while the panel is drawing, where a blank chart
+    beats a stack trace."""
+    assert pv.open_position_point(None).empty
+    assert pv.open_position_point({}).empty
+    assert pv.open_position_point({"entry_price": 45.0}).empty              # no time
+    assert pv.open_position_point({"entry_time": "2026-08-08T00:00:00+00:00"}).empty
+    assert pv.open_position_point({"entry_time": "nie-data", "entry_price": 1.0}).empty
+
+
 # ---------- price sources ----------
 
 def test_closes_returns_an_empty_frame_for_a_missing_file(tmp_path):
