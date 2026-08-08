@@ -45,6 +45,7 @@ HOT_FIELDS: frozenset[str] = frozenset({
     "strategy.atr_period",
     "strategy.direction",
     "strategy.rollover",
+    "strategy.reentry_cooldown_bars",
     "risk.position_pct",
     "risk.max_open_positions",
     "risk.daily_loss_limit_pct",

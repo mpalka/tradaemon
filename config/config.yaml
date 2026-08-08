@@ -39,6 +39,17 @@ strategy:
                          # extends; at a take-profit it depends on where the bar
                          # closed. Stop-losses never extend.
 
+  reentry_cooldown_bars: 0
+                         # Bars to sit out after closing a pair, before buying it
+                         # back. 0 = an exit and a fresh entry may share a candle,
+                         # which looks like needless churn and is not: measured on
+                         # 5.5 years x 10 pairs, waiting one bar costs 21.6 pts of
+                         # mean return (+146.7% -> +125.0%) and was worse on all
+                         # ten pairs; two bars -31.5, four bars -49.5. Fees do
+                         # fall (1384 -> 1149 USDT at cd=1), by far less than the
+                         # return does. Kept as a dial so the result stays
+                         # reproducible, not because it is worth turning up.
+
   prob_threshold: 0.55   # minimal model probability to open a position
                          # (lower = more trades; 0.50 ~ +39% vs 0.60, still ~0 edge)
   warmup_bars: 300       # history needed before features are valid

@@ -58,6 +58,13 @@ class StrategyConfig(BaseModel):
     # fresh deadline) instead of closing and reopening on the same bar — the
     # round trip pays double fees and slippage to keep holding the same coins.
     rollover: bool = False
+    # Bars to wait before re-entering a pair the book just closed. 0 keeps the
+    # current behaviour: an exit and a fresh entry can land on the same candle.
+    # 1 makes the book sit out that candle. The question it exists to answer is
+    # whether an immediate re-entry earns its two fees, or whether it is the same
+    # bet re-established at a cost — the features barely move inside one bar, so
+    # the "new" signal is largely the old one.
+    reentry_cooldown_bars: int = 0
 
 
 class ExecutionConfig(BaseModel):
@@ -97,6 +104,7 @@ class VariantConfig(BaseModel):
     horizon_bars: float | None = None
     direction: str | None = None
     rollover: bool | None = None
+    reentry_cooldown_bars: int | None = None
     position_pct: float | None = None
     max_open_positions: int | None = None
 
@@ -138,7 +146,8 @@ class Config(BaseModel):
         strat = self.strategy.model_dump()
         risk = self.risk.model_dump()
         for field in ("prob_threshold", "tp_atr_mult", "sl_atr_mult",
-                      "horizon_bars", "direction", "rollover"):
+                      "horizon_bars", "direction", "rollover",
+                      "reentry_cooldown_bars"):
             if (val := getattr(variant, field)) is not None:
                 strat[field] = val
         for field in ("position_pct", "max_open_positions"):

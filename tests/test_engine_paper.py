@@ -176,6 +176,47 @@ def test_a_take_profit_is_never_rolled_over(engine, cfg):
     assert trades[-1]["exit_reason"] == "tp"
 
 
+def test_a_cooldown_keeps_the_book_out_for_the_bar_it_just_closed(engine, cfg):
+    """The exit and the entry that undoes it share one call to `on_candle`, so a
+    cooldown of one bar is what separates them.
+
+    Kept as a measured-off dial rather than a fix: sweeping it over 5.5 years and
+    ten pairs cost 21.6 points of mean return at cd=1 and was worse on every
+    single pair, so the immediate re-entry earns its fees several times over.
+    The test pins the mechanism so the finding stays reproducible.
+    """
+    cfg.strategy.rollover = False        # let the take-profit actually close
+    df = make_ohlcv(cfg.strategy.warmup_bars + 5)
+    feed(engine, df)                     # warm up without it, or the book ends flat
+    pos = engine.positions["BTC/USDT"]
+    cfg.strategy.reentry_cooldown_bars = 1
+
+    engine.on_candle("BTC/USDT", _tp_bar(df, pos, close_price=pos.tp * 1.002))
+    assert "BTC/USDT" not in engine.positions          # closed, and not bought back
+    assert engine.signals["BTC/USDT"]["reason"] == "reentry_cooldown"
+
+    last = df.iloc[-1]
+    price = float(pos.tp) * 1.002
+    engine.on_candle("BTC/USDT", {
+        "timestamp": last["timestamp"] + pd.Timedelta(minutes=2),
+        "open": price, "high": price * 1.0001, "low": price * 0.9999,
+        "close": price, "volume": 5.0,
+    })
+    assert "BTC/USDT" in engine.positions              # the next bar is free again
+
+
+def test_a_cooldown_survives_a_restart(engine, cfg):
+    """A cooldown a restart forgets is not a cooldown — the container comes back
+    inside the same bar and buys straight back in."""
+    cfg.strategy.reentry_cooldown_bars = 1
+    engine.last_exit_ts["BTC/USDT"] = "2026-01-01T00:00:00+00:00"
+    engine.persist(datetime.now(UTC))
+
+    fresh = Book("default", cfg, FakeBundle(), PaperExecutor(cfg), engine.store)
+    fresh.restore()
+    assert fresh.last_exit_ts == engine.last_exit_ts
+
+
 def test_a_stop_loss_never_rolls_over(engine, cfg):
     """Extending a stop is abandoning the risk limit, not saving a fee — so it
     closes even with the signal still firing and the round trip a pure cost."""

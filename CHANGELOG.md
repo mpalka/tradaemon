@@ -3,6 +3,21 @@
 Najnowsze na górze. Numer wersji z tego pliku musi zgadzać się z `__version__`
 w `src/trademon/__init__.py` — pilnuje tego `tests/test_version.py`.
 
+## 0.1.10 — 2026-08-08
+
+- Nowe pokrętło `strategy.reentry_cooldown_bars` (domyślnie **0**, czyli bez
+  zmiany zachowania): ile świec bot ma odczekać, zanim odkupi parę, którą przed
+  chwilą zamknął. Odtwarzane ze `state.json`, więc restart kontenera go nie zmyje.
+- **Zmierzone i odrzucone jako domyślne.** Powód powstania był konkretny: bot
+  sprzedaje SOL po TP i odkupuje w tej samej świecy, co wygląda na nabijanie
+  prowizji. Pomiar na 5,5 roku i dziesięciu parach mówi coś przeciwnego —
+  odczekanie **jednej** świecy kosztuje 21,6 pkt proc. średniego wyniku
+  (+146,7% → +125,0%) i wypada gorzej na **wszystkich dziesięciu parach**;
+  dwie świece −31,5, cztery −49,5. Prowizje faktycznie spadają (1384 → 1149 USDT
+  przy jednej świecy), tylko dużo mniej, niż spada wynik. Natychmiastowe wejście
+  zarabia na swoje prowizje wielokrotnie — ta „bezsensowna" wymiana jest jednym
+  ze źródeł zysku, nie kosztem do wycięcia.
+
 ## 0.1.9 — 2026-08-08
 
 - `strategy.timeout_rollover` nazywa się teraz `strategy.rollover` i ma jawny

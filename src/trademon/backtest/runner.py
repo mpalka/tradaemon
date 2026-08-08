@@ -91,6 +91,7 @@ def run_backtest(
     entry_bar = -1
     deadline = -1
     entry_ts = None
+    last_exit_bar = -10**9   # far enough back that no cooldown is ever active at t=0
 
     # pending maker limit entry (order_style == "maker")
     pend_active = False
@@ -172,6 +173,7 @@ def run_backtest(
                     }
                 )
                 pos_qty, margin = 0.0, 0.0
+                last_exit_bar = t
 
         # 2) maker: try to fill a resting entry limit, or expire it unfilled
         if maker and pend_active and pos_qty == 0.0:
@@ -198,6 +200,9 @@ def run_backtest(
             and t >= trade_from
             and t + 1 < len(df)
             and atr_v[t] > 0
+            # The exit above happened on this same bar t, so a cooldown of 1 is
+            # what stops a close and its undo from sharing one candle.
+            and t >= last_exit_bar + strat.reentry_cooldown_bars
         ):
             sig_side = 0
             best_p = strat.prob_threshold

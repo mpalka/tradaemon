@@ -52,7 +52,8 @@ CONNECTION_ALERT_AFTER = 3   # failed attempts before the journals are told
 # (symbols, timeframe, warmup, the variant list) is baked into __init__ or the feed
 # and needs the restart handshake instead — see config_store.RESTART_FIELDS.
 HOT_STRATEGY_FIELDS = ("prob_threshold", "tp_atr_mult", "sl_atr_mult",
-                       "horizon_bars", "atr_period", "direction", "rollover")
+                       "horizon_bars", "atr_period", "direction", "rollover",
+                       "reentry_cooldown_bars")
 HOT_RISK_FIELDS = ("position_pct", "max_open_positions",
                    "daily_loss_limit_pct", "drawdown_alert_pct")
 HOT_COST_FIELDS = ("taker_fee", "maker_fee", "slippage_bps")
@@ -119,6 +120,8 @@ class Book:
         self.last_close: dict[str, float] = {}
         self.signals: dict[str, dict] = {}
         self.last_candle_ts: dict[str, str] = {}
+        # When each pair was last closed, so reentry_cooldown_bars can be enforced.
+        self.last_exit_ts: dict[str, str] = {}
         self.cash = cfg.paper.initial_capital
         self._peak_equity = cfg.paper.initial_capital
         self._dd_alerted = False
@@ -305,6 +308,7 @@ class Book:
         # live point the benchmarks could not match.
         self.last_close = {s: float(v) for s, v in state.get("last_close", {}).items()}
         self.last_candle_ts = dict(state.get("last_candle_ts", {}))
+        self.last_exit_ts = dict(state.get("last_exit_ts", {}))
         log.info("[%s] restored: cash=%.2f, open positions: %s",
                  self.name, self.cash, list(self.positions) or "none")
 
@@ -336,6 +340,7 @@ class Book:
             "drawdown_pct": self.drawdown_pct(),
             "last_close": self.last_close,
             "last_candle_ts": self.last_candle_ts,
+            "last_exit_ts": self.last_exit_ts,
             "signals": self.signals,
             "positions": {s: p.to_json() for s, p in self.positions.items()},
             "risk": self.risk.snapshot(),
@@ -435,6 +440,7 @@ class Book:
         pnl = pos.sign * pos.qty * (fill.price - pos.entry_price) - pos.entry_fees - fill.fee
         self.cash += pos.margin + pos.sign * pos.qty * (fill.price - pos.entry_price) - fill.fee
         del self.positions[symbol]
+        self.last_exit_ts[symbol] = now.isoformat()
         self.risk.record_realized_pnl(pnl, now, self.equity())
         self.store.append_trade({
             "mode": self.cfg.mode, "symbol": symbol, "side": pos.side,
@@ -501,6 +507,32 @@ class Book:
                    now, symbol=symbol, side=pos.side, prob=prob, reason=reason)
         return True
 
+    def _in_reentry_cooldown(self, symbol: str, now: datetime) -> bool:
+        """Has this pair been closed too recently to buy back into?
+
+        The exit and the entry that undoes it sit in the same call to `on_candle`,
+        so with a cooldown of zero — the default, and the behaviour measured so far
+        — a take-profit can be followed by a fresh position on the very same
+        candle. Whether that re-entry earns its two fees is the open question this
+        exists to measure: a bar barely moves the features, so the signal that
+        justifies it is largely the one that was already there.
+
+        Counted in bars rather than seconds so the meaning survives a timeframe
+        change, and restored from state.json so a container restart cannot wash a
+        cooldown away.
+        """
+        bars = int(self.cfg.strategy.reentry_cooldown_bars)
+        if bars <= 0:
+            return False
+        last = self.last_exit_ts.get(symbol)
+        if last is None:
+            return False
+        try:
+            exited_at = datetime.fromisoformat(last)
+        except ValueError:
+            return False
+        return now < exited_at + self._bar_delta * bars
+
     def _record_signal(self, symbol: str, reason: str, **extra) -> None:
         self.signals[symbol] = {"reason": reason,
                                 "threshold": self.cfg.strategy.prob_threshold, **extra}
@@ -534,6 +566,9 @@ class Book:
         ok, why = self.risk.can_open(len(self.positions), self.equity(), now)
         if not ok:
             self._record_signal(symbol, "risk_blocked", detail=why)
+            return
+        if self._in_reentry_cooldown(symbol, now):
+            self._record_signal(symbol, "reentry_cooldown")
             return
 
         view, why = self._model_view(buf)
