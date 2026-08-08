@@ -1,9 +1,14 @@
 # Jak to działa (od środka)
 
 README opisuje **co** ten projekt robi i **jakie dał wyniki**. Ten plik opisuje
-**mechanizm**: jaką drogę przechodzi jedna świeca od giełdy do zlecenia, kto pisze
-i kto czyta które pliki, i dlaczego kilka rzeczy jest zrobionych inaczej, niż
-wyglądałaby wersja oczywista.
+**mechanizm**: jaką drogę przechodzi jedna świeca od giełdy do zlecenia, jak wygląda
+gra, którą bot faktycznie prowadzi (§4), kto pisze i kto czyta które pliki, i dlaczego
+kilka rzeczy jest zrobionych inaczej, niż wyglądałaby wersja oczywista.
+
+Sekcje 1–3 są o **budowie**. Sekcja 4 i podsekcje „Mechanika" w kolejnych rozdziałach
+są o **zachowaniu**: co każdy komponent robi w kolejnych minutach, dniach i tygodniach,
+i co robi w przypadkach, w których nic ciekawego się nie dzieje — bo to jest jego
+domyślny stan.
 
 Wersja kodu, którą opisuje ten dokument: `0.1.8`.
 
@@ -31,7 +36,7 @@ Dwie zasady, z których wynika reszta architektury:
    Dzięki temu dwa procesy nad tym samym bind-mountem nie potrzebują żadnego
    zamka.
 2. **Panel jest jedynym pisarzem konfiguracji** — i to nie do `config/config.yaml`,
-   tylko do siostrzanego `config/config.overrides.yaml` (patrz §7).
+   tylko do siostrzanego `config/config.overrides.yaml` (patrz §8).
 
 Ruch w drugą stronę — panel chce coś zmienić w silniku — idzie przez ten sam dysk:
 zapis nakładki (silnik podnosi ją sam) albo plik-flaga `runtime/restart_requested`
@@ -151,7 +156,7 @@ Co się dzieje na jednej zamkniętej świecy, w tej kolejności:
 on_candle(symbol, bar)
   1. dopisz bar do bufora (ostatnie warmup + horizon + 50 barów)
   2. _maybe_reload_models()   – czy refresher podmienił model?
-  3. _maybe_reload_config()   – czy panel zmienił parametry? (§7)
+  3. _maybe_reload_config()   – czy panel zmienił parametry? (§8)
   4. _manage_position()       – TP / SL / timeout na OTWARTEJ pozycji
   5. _maybe_enter()           – dopiero teraz rozważ nowe wejście
   6. dopisz wiersz do equity.jsonl
@@ -230,7 +235,164 @@ co bot trzyma teraz. Otwarte pozycje są w `state.json` i panel musi czytać oba
 
 ---
 
-## 4. Moduł 2: zarządca portfela
+## 4. Mechanika gry: co bot robi przy stole
+
+Sekcja 3 opisuje, z czego bot jest zbudowany. Ta opisuje, w co on właściwie **gra** —
+jakie ma zasady, co robi w typowej turze i co się dzieje w przypadkach brzegowych.
+
+### 4.1 Zasady gry
+
+| | |
+|---|---|
+| **Plansza** | 10 par USDT, każda niezależnie |
+| **Tura** | zamknięcie świecy 4h — 6 tur na dobę na parę, 60 decyzji dziennie łącznie |
+| **Ręka** | maksymalnie 3 otwarte pozycje jednocześnie, po 10% kapitału każda |
+| **Limit stołu** | 1 pozycja na parę — nie ma dokładania ani uśredniania |
+| **Kierunek** | domyślnie tylko long; `direction: long_short` włącza drugi model |
+| **Koniec tury** | take-profit, stop-loss, timeout po 12 barach (2 dni) albo przedłużenie |
+| **Wykluczenie z gry** | strata zrealizowana ≥ 3% kapitału z początku doby — do końca doby UTC |
+| **Stawka** | wirtualna, dopóki `mode: paper` |
+
+Bot nie ma dźwigni, nie ma trailing stopu, nie skaluje wejść i nie przenosi stopa na
+poziom wejścia. Każda pozycja to **jeden zakład o ustalonej z góry wypłacie i ustalonym
+z góry terminie**. To jest świadomy wybór: przy przewadze bliskiej zeru każdy dodatkowy
+mechanizm dokłada tylko parametr do dopasowania.
+
+### 4.2 Życie jednej pozycji, z liczbami
+
+Kapitał 1000 USDT, ETH po 2000, ATR(14) = 40 USDT (2% ceny), model daje `p_long` = 0,58
+przy progu 0,55.
+
+```
+1. WIELKOŚĆ      1000 × 10%  = 100 USDT  →  100 / 2000 = 0,05 ETH
+2. WEJŚCIE       poślizg 2 bps: 2000 × 1,0002 = 2000,40
+                 prowizja 0,1%: 0,10 USDT      →  z gotówki schodzi 100,12
+3. BARIERY       TP = 2000,40 + 1,5 × 40 = 2060,40   (+3,0%)
+                 SL = 2000,40 − 2,0 × 40 = 1920,40   (−4,0%)
+                 deadline = teraz + 12 × 4h = 48 godzin
+4. CZEKANIE      co świecę: czy high ≥ TP? czy low ≤ SL? czy minął deadline?
+                 świeca dotykająca OBU barier liczy się jako SL
+5. WYJŚCIE (TP)  sprzedaż po 2060,40 × 0,9998 = 2059,99, prowizja 0,10
+                 PnL = 0,05 × (2059,99 − 2000,40) − 0,10 − 0,10 ≈ +2,78 USDT
+```
+
+Runda kosztuje **0,24% nominału** (2 × prowizja 0,1% + 2 × poślizg 0,02%), czyli
+tu ~0,24 USDT. Dlatego raport backtestu drukuje `median_tp_pct` obok
+`round_trip_cost_pct`: jeśli mediana odległości do TP nie przekracza kosztu rundy
+z zapasem, strategia nie ma z czego żyć — i dokładnie to unieważniło pomysł grania
+na świecach 1-minutowych.
+
+Pozycja idzie do `state.json` natychmiast. Do `trades.jsonl` trafia dopiero w kroku 5 —
+przy zamknięciu (§3.9).
+
+### 4.3 Arytmetyka barier: dlaczego próg jest tam, gdzie jest
+
+TP = 1,5 ATR, SL = 2,0 ATR. Bot **ryzykuje więcej, niż celuje** — więc sama wygrana
+częściej niż przegrana nie wystarcza:
+
+```
+próg opłacalności = SL / (TP + SL) = 2,0 / 3,5 ≈ 57% trafień
+```
+
+To nie jest przypadek, że model jest uczony dokładnie na tym zdarzeniu: etykieta
+triple-barrier (§3.3) brzmi „TP przed SL" przy tych samych mnożnikach, więc
+`prob_threshold` porównuje się bezpośrednio z tym progiem. Domyślne 0,55 leży
+**poniżej** 57% — bot świadomie wpuszcza zakłady z lekko ujemną wartością oczekiwaną
+z samych barier, w zamian za częstsze granie.
+
+Dwa zastrzeżenia, żeby ten rachunek nie brzmiał ostrzej niż jest: dotyczy tylko wyjść
+przez bariery (timeout wychodzi po cenie zamknięcia, gdziekolwiek ona jest), i zakłada
+skalibrowany model. Ale wyjaśnia, czemu `prob_threshold` to najczęściej ruszany
+parametr w panelu, i czemu jeden z wariantów A/B testuje 0,65.
+
+### 4.4 Co bot robi przez większość czasu: nic
+
+To jest najważniejsza część mechaniki i najłatwiejsza do przeoczenia. W backteście
+pozycja jest otwarta na **6–11% świec na parę**. Przez pozostałe ~90% czasu tura
+kończy się wpisem w `signals[symbol]` i niczym więcej.
+
+Ranking powodów, od najczęstszego:
+
+| Powód | Co znaczy |
+|---|---|
+| `below_threshold` | model policzył prawdopodobieństwo, wyszło za mało — **stan normalny** |
+| `in_position` | ta para jest już zajęta |
+| `risk_blocked` | trzy pozycje otwarte albo kill-switch |
+| `warmup` | bufor krótszy niż 300 barów (po świeżym starcie bez historii) |
+| `features_nan` / `no_atr` | dziura w danych albo świeca bez zakresu |
+
+Panel czyta to jeden do jednego w zakładce „Model: dlaczego nie handluje". Nuda
+w dzienniku zdarzeń nie jest awarią — to jest domyślny tryb pracy tej strategii.
+Skutek uboczny: **~70–80% konta stoi w gotówce**, i to właśnie ten fakt wymusza dwa
+benchmarki w panelu zamiast jednego (§7).
+
+### 4.5 Dzień, w którym bot przegrywa
+
+Kill-switch liczy tylko **stratę zrealizowaną** od początku doby UTC, licząc od
+kapitału z jej początku. Po przekroczeniu 3%:
+
+- nowe wejścia są zablokowane na wszystkich parach do północy UTC (`can_open` zwraca
+  `risk_blocked`);
+- otwarte pozycje **dalej żyją** — TP, SL i timeout działają normalnie, bo zamykanie
+  jest wyjściem z ryzyka, nie wchodzeniem w nie;
+- przedłużenie pozycji (rollover) jest wyłączone, bo zastępuje wejście, które i tak
+  byłoby zablokowane;
+- do `alerts.jsonl` idzie jeden alarm `kill_switch`, nie jeden na świecę.
+
+Dzień jest częścią stanu księgi, więc restart kontenera w środku złego dnia **nie
+kasuje limitu** — `RiskManager.restore` odczytuje datę, kapitał początkowy doby
+i zrealizowany wynik.
+
+Osobno działa alarm obsunięcia: przy spadku o `drawdown_alert_pct` od szczytu leci
+jedno powiadomienie, a próg odwieszenia jest o połowę niższy niż próg alarmu —
+histereza, żeby księga drgająca wokół granicy nie wysyłała alarmu co świecę.
+
+### 4.6 Rytm doby: co się dzieje między świecami
+
+Silnik nie stoi bezczynnie między decyzjami. Cztery pętle chodzą równolegle,
+z bardzo różnymi zegarami:
+
+```
+co 5 s     REST polling (fallback, gdy WebSocket padł) — szuka nowej zamkniętej świecy
+co 10 s    _restart_watcher — czy panel poprosił o restart?
+co 60 s    _ticker_loop — świeże ceny → mark_to_market → state.json.  NIE HANDLUJE
+co 4 h     zamknięcie świecy → on_candle → jedyny moment, w którym powstaje zlecenie
+```
+
+Stąd bierze się pozorna sprzeczność w panelu: „ile masz" zmienia się co minutę,
+a transakcje pojawiają się kilka razy na tydzień. Wycena jest ciągła, decyzja jest
+dyskretna.
+
+Przy zerwanej sieci rytm się rozjeżdża świadomie: każda pętla ma własny backoff
+(5 s → 10 s → … → 300 s), po trzeciej nieudanej próbie startu do dzienników idzie
+alarm `connection` z `ok=False`, a po powrocie — para z `ok=True` (§3.8).
+
+### 4.7 Cztery księgi grają tę samą rozdaną kartę
+
+`variants:` w konfiguracji to nie cztery boty. To **jeden strumień świec i cztery
+niezależne portfele**, które dostają dokładnie te same dane w tej samej chwili:
+
+| Księga | Próg | Sizing | Sufit ekspozycji |
+|---|---|---|---|
+| `prog_050` (główna) | 0,50 | 3 × 10% | 30% |
+| `prog_055` | 0,55 | 3 × 10% | 30% |
+| `prog_065` | 0,65 | 3 × 10% | 30% |
+| `ryzyko_100` | 0,50 | 5 × 20% | **100%** |
+
+Trzy pierwsze różnią się wyłącznie progiem, więc różnica w ich krzywych kapitału jest
+różnicą progu i niczego więcej. Czwarta ma **identyczny sygnał co `prog_050`** —
+zmienia się tylko apetyt. To jest eksperyment z z góry postawioną tezą: na zmierzonych
+zwrotach dziennych optymalna frakcja Kelly'ego wychodzi ~0,47, więc 100% ekspozycji
+jest mniej więcej dwa razy za daleko, gdzie kara za wariancję (rośnie z kwadratem)
+przegania zysk (rośnie liniowo). `primary_variant` przypina `prog_050` do ekranu
+głównego, żeby ta księga nigdy nie trafiła na niego jako „Twój portfel".
+
+Każda księga ma własny katalog w `runtime/`, własną gotówkę i własny kill-switch.
+Wspólne mają: świece, model i egzekutora.
+
+---
+
+## 5. Moduł 2: zarządca portfela
 
 Ten sam szkielet, inny zegar i inna decyzja. `PortfolioBook.on_day(dzień, ceny, panel)`
 zamiast `on_candle`.
@@ -253,9 +415,50 @@ zmienia. Dlatego pętla może budzić się co 6 h bez ryzyka podwójnego wykonan
 `--backfill` może przepuścić całą historię (5452 dni) przez dokładnie ten sam kod, co
 handel na żywo.
 
+### 5.1 Mechanika: jak wygląda rok w życiu tej księgi
+
+Zasady gry są odwrotnością modułu 1 — nie ma prognozy, jest **pasmo i termin**:
+
+| | |
+|---|---|
+| **Plansza** | 3 ETF-y: SPY 50% / TLT 30% / GLD 20% |
+| **Tura** | jeden dzień giełdowy |
+| **Wyzwalacz** | 90 dni od ostatniego rebalansu **LUB** dowolna waga odchylona o ≥ 5 pkt proc. |
+| **Ruch** | sprzedaj to, czego jest za dużo; kup to, czego za mało; wróć do wag docelowych |
+| **Koniec gry** | nie ma — księga jest zawsze w 100% zainwestowana |
+
+Typowy rok to **2–4 ruchy**. Reszta dni kończy się dopisaniem wiersza do `equity.jsonl`
+i niczym więcej. Przykład jednej tury, która coś zmienia:
+
+```
+Wartość 11 000 $ po dobrym kwartale akcji:
+  SPY  6 160 $  (56,0%)   cel 50%  →  5 500 $    SPRZEDAJ 660 $
+  TLT  2 750 $  (25,0%)   cel 30%  →  3 300 $    KUP      550 $
+  GLD  2 090 $  (19,0%)   cel 20%  →  2 200 $    KUP      110 $
+
+max drift = 6,0 pkt ≥ 5,0  →  rebalans
+sprzedaże idą pierwsze, żeby miały czym sfinansować kupna
+```
+
+Zwróć uwagę, co się właśnie stało: bot **sprzedał to, co rosło**, i dokupił tego, co
+spadało. To nie jest błąd, to jest cała strategia — i to samo jest powodem, dla którego
+na 10 latach przegrywa z „kup i trzymaj" o 33 pkt, przycinając zwycięzcę w hossie,
+a jednocześnie ma o 9,6 pkt płytsze obsunięcie. Wartością jest dyscyplina, nie alfa.
+
+Trzy szczegóły zachowania, które łatwo przeoczyć:
+
+- **Pierwszy dzień jest wyjątkiem.** Świeża księga trzyma 10 000 $ gotówki i nie ma
+  driftu do zmierzenia, więc `on_day` wykonuje `initial_allocation` bezwarunkowo, poza
+  regułą kadencji.
+- **Kupno jest ograniczane gotówką**, a sprzedaż stanem posiadania (`settle_orders`).
+  Prowizja nigdy nie wprowadzi księgi na debet, nawet gdy zaokrąglenia się nie zgadzają.
+- **Filtr trendu jest wyłączony i taki ma zostać.** Włączony zamienia rebalanser
+  w strategię: aktywo poniżej średniej 200-dniowej ląduje w TLT albo w gotówce. To jest
+  pole do eksperymentów, nie ulepszenie — README pokazuje, że w hossie kosztuje zwrot.
+
 ---
 
-## 5. Moduł 3: ranking przekrojowy (badanie)
+## 6. Moduł 3: ranking przekrojowy (badanie)
 
 Nie ma księgi ani kontenera — jest skrypt i raport. Sygnał to momentum
 `lookback_days` z **pominięciem** ostatnich `skip_days` (najświeższy ruch ma skłonność
@@ -267,9 +470,31 @@ Ten sam kod chodzi na krypto i na ETF-ach, na **czterech rozłącznych oknach**,
 pokazuje wszystkie — bo trzy razy w tym projekcie „najlepszy" wynik z jednego okna
 okazał się szumem.
 
+### 6.1 Mechanika: jedna tura rankingu
+
+```
+co ~20 dni:
+  1. policz wynik każdego z 25 (krypto) / 29 (ETF) aktywów:
+     zwrot od −125 do −5 dnia  ← ostatnie 5 dni celowo pominięte
+  2. posortuj; weź 5 najsilniejszych (long) i 5 najsłabszych (short)
+  3. przytnij nogi, żeby się nie nakładały
+  4. przebuduj koszyk do równych wag; koszty przez ten sam fills.py
+  5. trzymaj przez kolejne 20 dni, nie patrząc na nic
+```
+
+Trzy różnice w zachowaniu wobec modułu 1, które są istotą tego badania: zakład dotyczy
+**różnicy między aktywami**, a nie kierunku rynku; nie ma stop-lossa ani take-profitu
+(pozycja żyje dokładnie do następnego przerankowania); i nie ma tu żadnego uczenia —
+sygnałem jest jawny wzór, nie model.
+
+Dlatego poprzeczka jest inna dla każdego wariantu: long-only mierzy się z koszykiem
+kup&trzymaj, a long-short z **gotówką** — książka o ekspozycji netto 0,4% jest
+praktycznie neutralna rynkowo, więc porównanie z w pełni długim koszykiem zawyżałoby
+ją w każdym spadku.
+
 ---
 
-## 6. Backtest i uczciwość pomiaru
+## 7. Backtest i uczciwość pomiaru
 
 `backtest/runner.py` jest event-driven i przechodzi przez `fills.py` (§3.5). Poza tym
 liczy się kilka rzeczy w `backtest/metrics.py`, które zmieniają interpretację wyniku:
@@ -290,7 +515,7 @@ losowo, nie handluj). Strategia, która nie bije kontroli, niczego nie udowodni�
 
 ---
 
-## 7. Konfiguracja: co wchodzi na gorąco, a co wymaga restartu
+## 8. Konfiguracja: co wchodzi na gorąco, a co wymaga restartu
 
 Panel **nigdy nie pisze do `config/config.yaml`**. Ten plik jest udokumentowaną
 bazą — nosi komentarze wyjaśniające, dlaczego 4h, dlaczego okno 2000 dni, po co
@@ -333,9 +558,38 @@ Model podmieniany przez refreshera jest pilnowany zwykłym `mtime`, i to jest w�
 wybór: plik ma megabajty (hash przy każdej świecy nie byłby darmowy), podmienia go
 tylko jeden proces i nikt go nie kasuje.
 
+### 8.1 Mechanika: co się dzieje po kliknięciu „Zapisz"
+
+```
+panel                                        silnik (każda z 4 ksiąg, osobno)
+─────                                        ────────────────────────────────
+1. walidacja pydantic (scalony config)
+2. zapis config.overrides.yaml (atomowy)
+3. wiersz do config_history.jsonl
+   (kto, kiedy, z czego na co)
+4a. pole HOT      → koniec, czekaj             ...co świecę: hash treści się zmienił?
+                                               → wczytaj, porównaj pole po polu
+                                               → podmień self.cfg, alarm „zmieniono
+                                                 ustawienia: prob_threshold: 0,55 → 0,60"
+                                               → od tego bara handluje po nowemu
+4b. pole RESTART  → dopisz flagę               ...co 10 s: flaga nowsza niż mój start?
+    runtime/restart_requested                  → zapisz księgi, anuluj feedy, wyjdź
+                                               → Docker wskrzesza, restore() wraca
+                                                 z gotówką i pozycjami
+```
+
+Zmiana jest widoczna z drugiej strony: `state.json` niesie `live_config` — parametry,
+które księga **w tej chwili egzekwuje** — a ekran ustawień porównuje je z dyskiem
+i ostrzega przy rozjeździe. Ostrzeżenie czeka na świecę, przy której zmiana powinna
+była wejść, i porównuje każdą księgę z jej własnym wariantem, żeby nie straszyć zaraz
+po zapisie ani nie mylić `ryzyko_100` z awarią.
+
+Zmiana parametrów w locie robi z krzywej kapitału mieszankę dwóch strategii — i to jest
+powód istnienia dziennika z punktu 3. Panel rysuje szew, zamiast po cichu uśrednić.
+
 ---
 
-## 8. Refresher: cotygodniowa bramka
+## 9. Refresher: cotygodniowa bramka
 
 `scripts/refresh.py`, w pętli `sleep 604800`:
 
@@ -355,9 +609,38 @@ w spadającym rynku: kandydat, który ledwo handluje, zwraca ~0% i „bije" benc
 który stracił 17%. Naiwne kontrole są osiągalnymi alternatywami, więc ich pobicie
 coś znaczy.
 
+### 9.1 Mechanika: co dzieje się w tygodniu, w którym bramka odrzuca
+
+Domyślnym wynikiem tego rytuału jest **„nic się nie zmienia"** — i tak ma być.
+
+```
+tydzień N     dociągnięcie danych  →  trening kandydata  →  backtest OOS
+              kandydat −0,38%  vs  „nic nie rób" +0,00%   →  ODRZUCONY
+              models/*.joblib nietknięte, bot handluje dalej starym modelem
+              runtime/refresh_status.json: {"status": "gate_failed", "detail": "..."}
+              kod wyjścia 2; docker-compose loguje komunikat i śpi 7 dni
+```
+
+Ostatni realny przebieg (2026-08-07) wyglądał dokładnie tak. Trzy konsekwencje warte
+wypowiedzenia:
+
+- **Bot nigdy nie stoi z powodu odrzucenia.** Model produkcyjny jest niezależnym
+  plikiem; kandydat powstaje obok i ginie, jeśli nie przejdzie.
+- **Podmiana nie wymaga restartu ani synchronizacji.** Refresher zapisuje plik,
+  a każda księga zauważa nowy `mtime` przy najbliższej świecy (§8, akapit o modelu).
+  Cztery księgi mogą przełączyć się na różnych barach — i to nie szkodzi, bo model
+  jest bezstanowy.
+- **Odrzucenie jest widoczne w panelu**, a nie tylko w logu kontenera:
+  `refresh_status.json` czyta zakładka „Zdrowie". Bramka, o której nikt się nie
+  dowiaduje, po kilku miesiącach nie różni się od bramki wyłączonej.
+
+Ten sam plik jest jedynym pisarzem `data/` po stronie modułu 1: dociąganie świec
+w refresherze ustala też, ile historii bot w ogóle kiedykolwiek zbierze
+(`model.train_window_days`).
+
 ---
 
-## 9. Panel (`dashboard/`)
+## 10. Panel (`dashboard/`)
 
 Streamlit, **tylko do odczytu** w zakresie stanu ksiąg; pisze wyłącznie konfigurację.
 
@@ -374,9 +657,44 @@ Streamlit, **tylko do odczytu** w zakresie stanu ksiąg; pisze wyłącznie konfi
 - `auth.py` — dziś zwraca `"local"` i `True`. To szew, nie zabezpieczenie: gdy pojawi
   się logowanie, zmienia się jedna implementacja, a nie każde miejsce zapisu.
 
+### 10.1 Mechanika: cykl życia jednego kliknięcia
+
+Streamlit nie ma zdarzeń — ma **przeliczenie całego skryptu od nowa** przy każdej
+interakcji i przy każdym auto-odświeżeniu (15 s, na telefonie 60 s, bo 4h świeca
+zamyka się sześć razy na dobę i częstsze pytanie kosztuje tylko transfer).
+
+```
+klik / tik odświeżenia
+   → app.py leci od pierwszej linii
+   → load_config()                       (tanie)
+   → journals.load_*()                   ← cache kluczowany ODCISKIEM PLIKU
+        plik się nie zmienił → z cache, zero parsowania
+        silnik dopisał wiersz → parsuj i pokaż od razu
+   → st.session_state trzyma to, co wybrał człowiek
+        (rozwinięty instrument, zakres 7d/30d, moduł)
+   → render
+```
+
+Dwie decyzje wynikające wprost z tego modelu:
+
+- **Cache na treści, nie na czasie.** TTL dałby okno, w którym panel pokazuje stan
+  sprzed chwili, choć plik jest już nowy. Odcisk pliku znaczy „nowy wiersz widać przy
+  najbliższym odświeżeniu, ani sekundy później".
+- **Wybór musi żyć w `session_state`.** Bez tego odświeżenie co 15 s zamykałoby
+  rozwinięty wykres kursu — element interfejsu zamknąłby się sam, zanim ktokolwiek
+  zdążyłby na niego spojrzeć.
+
+Panel nigdy nie liczy na żywo niczego ciężkiego. Zakładka „Badania" czyta **ostatni
+zapisany raport** z `models/reports/` i przelicza wyłącznie na danych z dysku, na
+wyraźne żądanie — pobieranie w trakcie renderowania zablokowałoby cały ekran.
+
+Czego panel nie może z definicji: uruchomić kontenera, zabić bota, zamknąć pozycji.
+Ma dokładnie dwa kanały wpływu na silnik — nakładkę konfiguracji i flagę restartu (§8).
+Gniazda Dockera nie ma i mieć nie powinien.
+
 ---
 
-## 10. Mapa katalogów
+## 11. Mapa katalogów
 
 ```
 src/trademon/
@@ -416,9 +734,15 @@ scripts/   download_data, train, backtest, refresh, portfolio_backtest,
 
 ---
 
-## 11. Czego ten system celowo nie robi
+## 12. Czego ten system celowo nie robi
 
 - **Nie handluje na świecy otwartej.** Nigdzie. Trzy miejsca odcinają ją niezależnie.
+  Ticker odświeża wycenę co minutę i nie ma prawa niczego kupić.
+- **Nie uśrednia, nie dokłada, nie przesuwa stopa.** Jedna pozycja na parę, wypłata
+  i termin ustalone przy wejściu (§4.1). Każdy dodatkowy mechanizm to kolejny parametr
+  do dopasowania przy przewadze bliskiej zeru.
+- **Nie używa dźwigni.** Short jest liczony po futuresowemu (margin = nominał wejścia),
+  ale w backteście i na papierze; na spocie nie da się go wykonać.
 - **Nie zmienia struktury bez restartu.** Lepiej zejść na 20 sekund niż handlować
   konfiguracją, której połowa weszła.
 - **Nie ma bazy danych ani API między procesami.** Cztery kontenery, jeden katalog,
