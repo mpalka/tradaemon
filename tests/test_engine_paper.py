@@ -93,8 +93,8 @@ def _flat_bars(df: pd.DataFrame, pos, n: int) -> list[dict]:
     } for i in range(n)]
 
 
-def test_timeout_rollover_extends_instead_of_closing(engine, cfg):
-    cfg.strategy.timeout_rollover = True
+def test_rollover_extends_instead_of_closing(engine, cfg):
+    cfg.strategy.rollover = True
     df = make_ohlcv(cfg.strategy.warmup_bars + 5)
     feed(engine, df)
     pos = engine.positions["BTC/USDT"]
@@ -120,7 +120,7 @@ def test_timeout_rollover_extends_instead_of_closing(engine, cfg):
 
 
 def test_timeout_still_closes_when_signal_is_gone(engine, cfg):
-    cfg.strategy.timeout_rollover = True
+    cfg.strategy.rollover = True
     df = make_ohlcv(cfg.strategy.warmup_bars + 5)
     feed(engine, df)
     pos = engine.positions["BTC/USDT"]
@@ -132,6 +132,78 @@ def test_timeout_still_closes_when_signal_is_gone(engine, cfg):
             break
     trades = [json.loads(x) for x in engine.store.trades_path.read_text().splitlines()]
     assert trades and trades[-1]["exit_reason"] == "timeout"
+
+
+def _tp_bar(df: pd.DataFrame, pos, close_price: float) -> dict:
+    """A bar that touches the take-profit and closes where we say — with its low
+    held clear of the stop, so `check_bracket_exit` cannot call it an SL instead."""
+    last = df.iloc[-1]
+    return {
+        "timestamp": last["timestamp"] + pd.Timedelta(minutes=1),
+        "open": float(last["close"]), "high": max(pos.tp * 1.001, close_price),
+        "low": max(pos.sl * 1.001, min(float(last["close"]), close_price) * 0.9999),
+        "close": close_price, "volume": 5.0,
+    }
+
+
+def _closed_trades(engine) -> list[dict]:
+    path = engine.store.trades_path
+    if not path.exists():
+        return []
+    return [json.loads(x) for x in path.read_text().splitlines() if x.strip()]
+
+
+def test_a_take_profit_is_never_rolled_over(engine, cfg):
+    """Even when the round trip is pure cost — the bar closes above the target, so
+    the bot sells low and buys back high, the SOL case that prompted this.
+
+    Declining the fill here would be reading the future: TP is detected from the
+    bar's high and filled at the barrier, i.e. it already went through before the
+    bar ended. Rolling it over anyway measured +146.6% -> +182.8% mean return over
+    5.5 years, thirty times the honest timeout-only effect — a number that says
+    "lookahead", not "edge". The churn is real; this is not the way to remove it.
+    """
+    cfg.strategy.rollover = True
+    df = make_ohlcv(cfg.strategy.warmup_bars + 5)
+    feed(engine, df)
+    pos = engine.positions["BTC/USDT"]
+    closed_before = len(_closed_trades(engine))
+
+    engine.on_candle("BTC/USDT", _tp_bar(df, pos, close_price=pos.tp * 1.002))
+
+    trades = _closed_trades(engine)
+    assert len(trades) == closed_before + 1
+    assert trades[-1]["exit_reason"] == "tp"
+
+
+def test_a_stop_loss_never_rolls_over(engine, cfg):
+    """Extending a stop is abandoning the risk limit, not saving a fee — so it
+    closes even with the signal still firing and the round trip a pure cost."""
+    cfg.strategy.rollover = True
+    df = make_ohlcv(cfg.strategy.warmup_bars + 5)
+    feed(engine, df)
+    pos = engine.positions["BTC/USDT"]
+    last = df.iloc[-1]
+
+    def n_rollovers() -> int:
+        rows = [json.loads(x) for x in
+                engine.store.alerts_path.read_text().splitlines() if x.strip()]
+        return sum(1 for a in rows if a["kind"] == "trade_rollover")
+
+    # the warmup feed rolls over take-profits of its own, so count the delta
+    rolled_before = n_rollovers()
+    engine.on_candle("BTC/USDT", {
+        "timestamp": last["timestamp"] + pd.Timedelta(minutes=1),
+        "open": float(last["close"]), "high": float(last["close"]),
+        "low": pos.sl * 0.999, "close": pos.sl, "volume": 5.0,
+    })
+
+    trades = _closed_trades(engine)
+    assert trades[-1]["exit_reason"] == "sl"
+    assert n_rollovers() == rolled_before
+    # the signal is still firing, so the engine re-enters on the same bar — that is
+    # a *new* position, not the one the stop was meant to end
+    assert engine.positions["BTC/USDT"].entry_price != pos.entry_price
 
 
 def test_hot_reload_swaps_models_when_file_changes(engine, tmp_path, monkeypatch):

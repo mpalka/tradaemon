@@ -29,13 +29,15 @@ strategy:
   tp_atr_mult: 1.5       # take-profit distance in ATR units (sweep2 best OOS combo)
   sl_atr_mult: 2.0       # stop-loss distance in ATR units
   horizon_bars: 12       # triple-barrier timeout, in bars (12 x 4h = 2 days)
-  timeout_rollover: true # at the deadline, if the signal is still above the
-                         # threshold, extend the position (new TP/SL + deadline)
-                         # instead of closing and reopening on the same bar for
-                         # double fees + slippage. Rare (0-12x per pair on 5.5y:
-                         # most timeouts fire after the signal has died) and
-                         # measured slightly positive: mean return +146.70% ->
-                         # +146.82%, total fees -18 USDT across 10 pairs.
+  rollover: true         # when an exit would be followed by an immediate re-entry
+                         # (the signal is still above the threshold), extend the
+                         # position instead — new TP/SL and deadline, no fills.
+                         # Only when the round trip does not pay for itself:
+                         # exiting is kept whenever the exit price beats the
+                         # re-entry price by more than the two fees. At a timeout
+                         # both prices are the same bar close, so it always
+                         # extends; at a take-profit it depends on where the bar
+                         # closed. Stop-losses never extend.
 
   prob_threshold: 0.55   # minimal model probability to open a position
                          # (lower = more trades; 0.50 ~ +39% vs 0.60, still ~0 edge)

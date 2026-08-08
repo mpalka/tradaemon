@@ -3,6 +3,26 @@
 Najnowsze na górze. Numer wersji z tego pliku musi zgadzać się z `__version__`
 w `src/trademon/__init__.py` — pilnuje tego `tests/test_version.py`.
 
+## 0.1.9 — 2026-08-08
+
+- `strategy.timeout_rollover` nazywa się teraz `strategy.rollover` i ma jawny
+  próg kosztowy: przedłuża, gdy przewaga ceny wyjścia nad ceną ponownego wejścia
+  nie pokrywa dwóch prowizji. Przy timeoucie obie ceny to zamknięcie tej samej
+  świecy, więc warunek jest zawsze spełniony — zachowanie bez zmian. Stop-loss
+  nie przedłuża nigdy: to porzucenie limitu ryzyka, nie oszczędność.
+- **Ustalenie, przez które ta zmiana jest mniejsza, niż miała być.** Rozszerzenie
+  przedłużania na wyjścia po zysku wyglądało w backteście rewelacyjnie: średni
+  wynik +146,6% → **+182,8%** na 5,5 roku i dziesięciu parach, każda para na
+  plusie. To nie jest przewaga, tylko zaglądanie w przyszłość. TP wykrywamy
+  z maksimum świecy — to dotknięcie **wewnątrz** świecy, wypełniane po cenie
+  bariery, czyli transakcja, która zaszła, zanim świeca się domknęła. Rezygnacja
+  z niej po zobaczeniu, gdzie świeca zamknęła, używa informacji z przyszłości.
+  Uczciwa wersja, ograniczona do timeoutu, daje +146,56% → +146,67% i 18 USDT
+  mniej prowizji — trzysta razy mniej, i tyle właśnie jest prawdziwe.
+- Zostaje przy tym prawdziwy problem do rozstrzygnięcia osobno: silnik budzi się
+  wyłącznie na zamknięciu świecy, a mimo to rozlicza TP po cenie bariery. To
+  optymistyczne założenie dotyczy całej dotychczasowej historii pomiarów.
+
 ## 0.1.8 — 2026-08-08
 
 - **Wykres kursu pokazuje pozycję, którą bot trzyma teraz** — jako zielone kółko

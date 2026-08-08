@@ -57,7 +57,7 @@ class StrategyConfig(BaseModel):
     # above the threshold, extend it (rebase TP/SL on the current close and ATR,
     # fresh deadline) instead of closing and reopening on the same bar — the
     # round trip pays double fees and slippage to keep holding the same coins.
-    timeout_rollover: bool = False
+    rollover: bool = False
 
 
 class ExecutionConfig(BaseModel):
@@ -96,7 +96,7 @@ class VariantConfig(BaseModel):
     sl_atr_mult: float | None = None
     horizon_bars: float | None = None
     direction: str | None = None
-    timeout_rollover: bool | None = None
+    rollover: bool | None = None
     position_pct: float | None = None
     max_open_positions: int | None = None
 
@@ -138,7 +138,7 @@ class Config(BaseModel):
         strat = self.strategy.model_dump()
         risk = self.risk.model_dump()
         for field in ("prob_threshold", "tp_atr_mult", "sl_atr_mult",
-                      "horizon_bars", "direction", "timeout_rollover"):
+                      "horizon_bars", "direction", "rollover"):
             if (val := getattr(variant, field)) is not None:
                 strat[field] = val
         for field in ("position_pct", "max_open_positions"):

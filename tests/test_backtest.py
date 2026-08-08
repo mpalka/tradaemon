@@ -28,10 +28,10 @@ def test_backtest_no_signals_no_trades(cfg):
     assert result["summary"]["total_return_pct"] == pytest.approx(0.0)
 
 
-def test_timeout_rollover_replaces_timeout_exits(cfg):
+def test_rollover_replaces_timeout_exits(cfg):
     df = make_ohlcv(2000)
     plain = run_backtest(df, FakeBundle(prob=0.99), cfg, "BTC/USDT")
-    cfg.strategy.timeout_rollover = True
+    cfg.strategy.rollover = True
     rolled = run_backtest(df, FakeBundle(prob=0.99), cfg, "BTC/USDT")
 
     # the signal never drops below the threshold, so every would-be timeout

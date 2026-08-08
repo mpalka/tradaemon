@@ -52,7 +52,7 @@ CONNECTION_ALERT_AFTER = 3   # failed attempts before the journals are told
 # (symbols, timeframe, warmup, the variant list) is baked into __init__ or the feed
 # and needs the restart handshake instead — see config_store.RESTART_FIELDS.
 HOT_STRATEGY_FIELDS = ("prob_threshold", "tp_atr_mult", "sl_atr_mult",
-                       "horizon_bars", "atr_period", "direction", "timeout_rollover")
+                       "horizon_bars", "atr_period", "direction", "rollover")
 HOT_RISK_FIELDS = ("position_pct", "max_open_positions",
                    "daily_loss_limit_pct", "drawdown_alert_pct")
 HOT_COST_FIELDS = ("taker_fee", "maker_fee", "slippage_bps")
@@ -411,10 +411,21 @@ class Book:
         elif reason == "sl":
             price_hint = pos.sl
         elif now >= pos.deadline:
-            if self._maybe_rollover(symbol, pos, bar, now):
-                return
             reason, price_hint = "timeout", float(bar["close"])
         if price_hint is None:
+            return
+        # Only a timeout may roll over, and the reason is subtle enough to be worth
+        # stating: it is the one exit this engine actually decides at the close.
+        # TP and SL are detected from the bar's high/low — an intra-bar touch — and
+        # filled at the barrier, which models an order that already went through
+        # before the bar ended. Declining that fill after seeing where the bar
+        # closed would be reading the future, and it measures like it: extending
+        # take-profits this way scored +146.6% -> +182.8% mean return across
+        # 5.5 years and ten pairs, thirty times the honest timeout-only effect.
+        # A stop-loss would not qualify anyway — extending it abandons the risk
+        # limit rather than saving a fee.
+        if reason == "timeout" and self._maybe_rollover(symbol, pos, bar, now,
+                                                        price_hint, reason):
             return
 
         if pos.side == "long":
@@ -435,37 +446,59 @@ class Book:
         self.alert("trade_close", f"{symbol} zamknięto {pos.side} ({reason}) "
                    f"PnL {pnl:+.2f} USDT", now, symbol=symbol, pnl=pnl, reason=reason)
 
-    def _maybe_rollover(self, symbol: str, pos: Position, bar: dict,
-                        now: datetime) -> bool:
-        """Extend an expired position whose signal is still live, instead of closing.
+    def _round_trip_cost(self, price: float) -> float:
+        """What closing here and reopening on this same bar costs, in price units."""
+        costs = self.cfg.costs
+        return 2.0 * (costs.taker_fee + costs.slippage) * price
 
-        Without this the deadline triggers a market close and — the signal still
-        being above threshold — a re-entry on the very same bar: a full round trip
-        of fees and slippage paid to keep holding what the book already held.
-        Rolling over is that close-and-reopen minus the costs: TP/SL rebased on the
-        current close and ATR, a fresh deadline, position and entry price kept.
-        On a kill-switch day the position still closes, because the reopen it
-        stands in for would have been blocked too.
+    def _maybe_rollover(self, symbol: str, pos: Position, bar: dict, now: datetime,
+                        exit_price: float, reason: str) -> bool:
+        """Extend a position instead of closing it, when the close would only be
+        undone by an immediate re-entry that costs more than it gains.
+
+        The engine exits at `exit_price` and re-enters at this bar's close, and it
+        knows both numbers at the moment it decides — so the comparison is a
+        measurement, not a forecast. Exiting is worth its two fills only when it
+        banks more than they cost:
+
+            edge = sign * (exit_price - close)   # what leaving here is worth
+            roll over  ⟺  edge <= round-trip cost
+
+        The rule reads the same for both exits it covers. A timeout fills at the
+        bar close, so `edge` is exactly zero and it always extends — the behaviour
+        this method already had. A take-profit fills at the target, so it depends
+        on where the bar ended: closing above the target (the case that prompted
+        this — SOL sold at 76.11 and bought back at 76.42, 0.63 USDT down) leaves a
+        negative edge and extends, while a bar that fell back below the target
+        leaves a positive one and the profit is taken, because there the round trip
+        really does buy back cheaper than it sold.
+
+        On a kill-switch day the position still closes: the reopen this stands in
+        for would have been blocked too.
         """
         strat = self.cfg.strategy
-        if not strat.timeout_rollover:
+        if not strat.rollover:
             return False
         if self.risk.kill_switch_active(now, self.equity()):
             return False
+        close = float(bar["close"])
+        if pos.sign * (exit_price - close) > self._round_trip_cost(close):
+            return False   # the round trip pays for itself — take it
         view, _ = self._model_view(self.buffers.get(symbol, pd.DataFrame()))
         if view is None:
             return False
         prob = view["p_long"] if pos.side == "long" else view["p_short"]
         if prob is None or prob < strat.prob_threshold:
             return False
-        close = float(bar["close"])
         pos.tp = close + pos.sign * strat.tp_atr_mult * view["atr"]
         pos.sl = close - pos.sign * strat.sl_atr_mult * view["atr"]
         pos.deadline = now + self._bar_delta * strat.horizon_bars
-        log.info("[%s] %s: rolled over %s (p=%.3f)", self.name, symbol, pos.side, prob)
+        log.info("[%s] %s: rolled over %s instead of %s (p=%.3f)",
+                 self.name, symbol, pos.side, reason, prob)
         self.alert("trade_rollover",
-                   f"{symbol} przedłużono {pos.side} @ {close:.2f} (p={prob:.2f})",
-                   now, symbol=symbol, side=pos.side, prob=prob)
+                   f"{symbol} przedłużono {pos.side} @ {close:.2f} "
+                   f"(p={prob:.2f}, zamiast wyjścia {reason})",
+                   now, symbol=symbol, side=pos.side, prob=prob, reason=reason)
         return True
 
     def _record_signal(self, symbol: str, reason: str, **extra) -> None:

@@ -7,10 +7,11 @@ Execution model (one position per symbol, long and optionally short):
   close[t] in maker mode, which may expire unfilled),
 - exits: TP/SL barrier touched intra-bar (both touched -> SL, conservative)
   or timeout after `horizon_bars` bars at that bar's close. With
-  `strategy.timeout_rollover` a timeout whose side still signals above the
-  threshold extends instead (TP/SL rebased on that bar's close and ATR, fresh
-  deadline) — the free version of the close-and-reopen the engine would
-  otherwise do on the same bar.
+  `strategy.rollover` a timeout whose side still signals above the threshold
+  extends instead (TP/SL rebased on that bar's close and ATR, fresh deadline) —
+  the free version of the close-and-reopen the engine would otherwise do on the
+  same bar. Only the timeout qualifies: it is the exit decided at the close,
+  while TP and SL are intra-bar touches already filled by the time the bar ends.
 
 Short accounting is futures-style: margin equal to the entry notional is set
 aside, pnl = qty * (entry - exit) - fees. Real short execution requires a
@@ -128,14 +129,23 @@ def run_backtest(
             elif reason == "sl":
                 exit_price = sl  # stop -> market order, stays taker
             elif t >= deadline:
+                reason, exit_price = "timeout", close[t]  # market order, taker
+            # Only a timeout, mirroring the engine: it is the one exit decided at
+            # the close. TP and SL are intra-bar touches filled at the barrier, so
+            # declining them once the bar has closed would be reading the future —
+            # and it scores like it (see the note in engine/loop.py).
+            if reason == "timeout" and exit_price is not None and strat.rollover:
                 p_now = p_long[t] if side == 1 else p_short[t]
-                if (strat.timeout_rollover and not np.isnan(p_now)
-                        and p_now >= strat.prob_threshold and atr_v[t] > 0):
+                exit_cost = costs.maker_fee if exit_maker else costs.taker_fee + costs.slippage
+                entry_cost = costs.maker_fee if maker else costs.taker_fee + costs.slippage
+                edge = side * (exit_price - close[t])
+                if (edge <= (exit_cost + entry_cost) * close[t]
+                        and not np.isnan(p_now) and p_now >= strat.prob_threshold
+                        and atr_v[t] > 0):
                     tp, sl = set_barriers(close[t], atr_v[t], side)
                     deadline = t + strat.horizon_bars
                     n_rollovers += 1
-                else:
-                    reason, exit_price = "timeout", close[t]  # market order, taker
+                    exit_price = None
             if exit_price is not None:
                 if side == 1:  # closing a long = sell
                     fill = (maker_sell_fill if exit_maker else sell_fill)(

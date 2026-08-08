@@ -34,7 +34,7 @@ HOT = "⚡"
 RESTART = "🔄"
 
 # Booleans shown as a Polish on/off selectbox rather than a bare True/False.
-BOOL_CHOICES = ("trend.enabled", "strategy.timeout_rollover")
+BOOL_CHOICES = ("trend.enabled", "strategy.rollover")
 
 
 @dataclass
@@ -74,7 +74,7 @@ CRYPTO_SECTIONS: dict[str, list[Field]] = {
         Field("strategy.horizon_bars", "Maksymalny czas trzymania (świece)", "int",
               "Po tylu świecach pozycja zamyka się niezależnie od wyniku.",
               min=1, max=500, step=1),
-        Field("strategy.timeout_rollover", "Przedłużanie po terminie", "choice",
+        Field("strategy.rollover", "Przedłużanie po terminie", "choice",
               "Gdy mija maksymalny czas trzymania, a model wciąż daje sygnał powyżej "
               "progu, bot przedłuża pozycję (nowe widełki i termin) zamiast zamykać "
               "i zaraz otwierać ją ponownie za podwójną prowizję.",
@@ -407,7 +407,7 @@ def _render_variants(cfg_path: Path, runtime_dir: Path,
                    "Puste pole = wartość z sekcji wyżej. Zmiana listy wymaga restartu.")
         variants = effective.get("variants", []) or []
         cols = ["name", "prob_threshold", "tp_atr_mult", "sl_atr_mult",
-                "horizon_bars", "direction", "timeout_rollover",
+                "horizon_bars", "direction", "rollover",
                 "position_pct", "max_open_positions"]
         df = pd.DataFrame(variants)
         for c in cols:
