@@ -337,6 +337,10 @@ Jeśli zdecydujesz się na live trading w Module 1:
 
 ## Architektura
 
+Skrót poniżej pokazuje przepływ danych. Pełny opis mechanizmu — droga jednej świecy
+od giełdy do zlecenia, kto pisze i czyta które pliki, co wchodzi na gorąco a co
+wymaga restartu — jest w [howitworks.md](howitworks.md).
+
 ### Moduł 1 — Krypto-scalper
 
 ```
