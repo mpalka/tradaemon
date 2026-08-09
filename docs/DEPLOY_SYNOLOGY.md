@@ -187,7 +187,8 @@ zapisuje na dysku NAS-a:
 ssh <nas> 'python3 -c "import json;s=json.load(open(\"/volume1/docker/trademon/runtime/prog_050/state.json\"));print(s[\"updated_at\"], len(s[\"last_close\"]), \"par\")"'
 ```
 
-Ma pokazać świeży czas i **10 par**. Zero par oznacza, że silnik nie dosięgnął
+Ma pokazać świeży czas i **18 par** (tyle liczy `exchange.symbols` od 0.1.11;
+wcześniej 10). Zero par oznacza, że silnik nie dosięgnął
 giełdy i przewrócił się przed pierwszym pobraniem świec — czyli DNS nadal nie
 działa i nie ma sensu szukać przyczyny w kodzie bota. Drugi sygnał: `ls -l` na
 `runtime/prog_050/equity.jsonl` — jeśli `state.json` jest sprzed sekund, a

@@ -2,7 +2,7 @@
 
 Narzędzie edukacyjne: **dwa równoległe moduły** do zabawy algorytmem i dyscypliną.
 
-1. **Moduł 1 — Krypto-scalper** (LightGBM, 4h, 10 par USDT, paper trading)
+1. **Moduł 1 — Krypto-scalper** (LightGBM, 4h, 18 par USDT, paper trading)
    Krótkoterminowy trading oparty o machine learning z triple-barrier labeling,
    walk-forward validation i backtestem uwzględniającym koszty. Backtest wykazuje
    przewagę ~0 po kosztach — moduł pełni rolę **laboratorium edukacyjnego**.
@@ -75,7 +75,7 @@ Uruchamia **cztery serwisy**:
 
 | Serwis | Rola |
 |--------|------|
-| `bot` | Moduł 1: krypto-scalper, 3 warianty A/B na 10 parach USDT |
+| `bot` | Moduł 1: krypto-scalper, 3 warianty A/B na 18 parach USDT |
 | `dashboard` | Panel na `localhost:8501` (oba moduły, UI dla początkującego) |
 | `portfolio` | Moduł 2: zarządca portfela, rebalancing ETF-ów |
 | `refresher` | Cotygodniowe trenowanie (bramka bezpieczeństwa: promuje tylko + wynik) |
@@ -129,7 +129,7 @@ i pozwala go przeliczyć na danych z dysku (bez pobierania, żeby nie blokować 
 
 ### Uczciwe liczby: ile pieniędzy naprawdę gra
 
-Scalper ma sufit ekspozycji (`position_pct` × `max_open_positions` = 30%), więc
+Scalper ma sufit ekspozycji (`position_pct` × `max_open_positions` = 50%), więc
 większość konta stoi w gotówce. To **nie jest wada strategii** — przy przewadze ≈ 0
 dokładanie pieniędzy zwiększyłoby stratę. Jest natomiast pułapką pomiaru, którą panel
 teraz nazywa wprost:
@@ -169,7 +169,7 @@ Ręcznie: `python scripts/refresh.py` (exit: 0=promocja, 2=bramka odrzuca, 1=bł
 
 [config/config.yaml](config/config.yaml):
 
-- `pairs` — lista par USDT (domyślnie 10 najpłynniejszych)
+- `pairs` — lista par USDT (domyślnie 18 najpłynniejszych)
 - `strategy` — timeframe (4h), TP/SL w ATR, horyzont, próg prawdopodobieństwa
 - `costs` — prowizja, poślizg na każdym fillu
 - `risk` — wielkość pozycji, max pozycji otwartych, dzienny kill-switch, próg alertu DD
@@ -409,7 +409,59 @@ Trzy zasady, na których stoją (bo bez nich liczby kłamią):
 
 # Czy warto wybierać transakcje po opłacalności, a nie tylko po pewności modelu?
 .venv/bin/python scripts/research/ev_gate.py --windows 30
+
+# Czy szersza plansza i inna reguła przydziału slotów pomagają całej książce?
+.venv/bin/python scripts/research/universe.py --windows 10 --window-days 90
 ```
+
+`universe.py` mierzy coś, czego pozostałe skrypty zmierzyć nie mogą, bo idą przez
+`backtest/runner.py` — a ten daje **każdej parze osobny portfel i nieograniczoną
+liczbę slotów**. Przy takim liczeniu dorzucenie par może wynik tylko podnieść, bo
+to zwykłe dopisanie kolejnego rachunku do średniej. Prawdziwa księga ma jeden
+portfel i `risk.max_open_positions` miejsc, o które pary konkurują. Ten skrypt
+liczy tę konkurencję przez [`backtest/book.py`](src/trademon/backtest/book.py) —
+wspólna gotówka, wspólny limit, ten sam `RiskManager` co silnik.
+
+### Wynik (2026-08): o wyniku decyduje limit, nie plansza
+
+Powód badania był praktyczny: `prog_050` z limitem podniesionym w panelu do 10 trzymał
+**9 z 10 par** przy 99 USDT wolnej gotówki. Plansza była wyczerpana — pytanie brzmiało,
+czy dołożyć par.
+
+Dziesięć okien po 90 dni, model trenowany od nowa przed każdym oknem, osobno dla każdej
+planszy, wszystkie pary konkurujące o jeden portfel:
+
+**1. Poszerzenie planszy płaci wyłącznie przy ciasnym limicie** (18 par minus 10 par):
+
+| limit | różnica | okna na plus |
+|---|---|---|
+| 3 | **+0,78 pp** | 7/10 |
+| 5 | −0,31 pp | 5/10 |
+| 10 | **−2,32 pp** | 3/10 |
+
+**2. Sam limit to najsilniejszy zmierzony efekt w tym projekcie** (limit 3 minus limit 10):
+
+| plansza | różnica | okna na plus | t |
+|---|---|---|---|
+| 18 par | **+4,49 pp** | 8/10 | **+2,73** |
+| 10 par | +1,39 pp | 5/10 | +0,90 |
+
+To jedyny wynik tutaj, który przekracza zwykły próg istotności. Mechanizm jest spójny:
+szeroka plansza jest wartościowa jako **pula do wybierania**, nie jako lista do
+zapełnienia. Przy 10 slotach książka bierze wszystko, co zasygnalizuje — 2609
+transakcji zamiast 1713 przy tej samej ekspozycji 80% — więc dodatkowe pary dokładają
+obrót i prowizje, i nic poza tym.
+
+**3. Oddawanie slotu najsilniejszemu sygnałowi nie płaci**: −0,6 do +0,7 pp, pięć z
+sześciu porównań na zero albo minus, nawet tam, gdzie limit odrzuca 3000 kandydatów.
+Najprostsze wyjaśnienie: prawdopodobieństwo z modelu jest zbyt słabo informatywne, żeby
+się nim dało sortować. Rankingu **nie wdrożono**. Silnik dostał z tego tylko
+diagnostykę: pyta model **przed** sprawdzeniem limitu, więc panel pokazuje, jak dużą
+okazję limit odrzucił, zamiast pustej kolumny obok „wstrzymany limitem ryzyka".
+
+Wdrożono 18 par i limit 5 — poszerzenie jest przy piątce neutralne, ale piątka bije
+dziesiątkę na obu planszach, a trójka (najlepsza w pomiarze) trzymałaby w rynku
+o połowę mniej kapitału.
 
 Każdy skrypt dzieli wynik według tego, **co robił rynek** (wzrosty / bok /
 spadki). To jest najważniejsza tabela w raporcie: strategia dodatnia tylko w

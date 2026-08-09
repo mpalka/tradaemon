@@ -540,11 +540,15 @@ class Book:
         if len(buf) < strat.warmup_bars:
             self._record_signal(symbol, "warmup")
             return
-        ok, why = self.risk.can_open(len(self.positions), self.equity(), now)
-        if not ok:
-            self._record_signal(symbol, "risk_blocked", detail=why)
-            return
-
+        # The risk check comes after the model, not before it, even though checking
+        # a counter is cheaper than a prediction. Asking the model first is what lets
+        # the panel say what the limit actually cost: with the old order a pair that
+        # was blocked had no probability to show, so "wstrzymany limitem ryzyka"
+        # appeared next to an empty p(long) and could equally have meant a 0.92
+        # opportunity turned away or a 0.31 non-event. It also stops the reason from
+        # lying — a full book used to be reported as the cause even for pairs that
+        # were nowhere near the threshold and would not have opened anyway.
+        # No trade changes: `can_open` still gates every entry, one call later.
         view, why = self._model_view(buf)
         if view is None:
             self._record_signal(symbol, why)
@@ -558,6 +562,12 @@ class Book:
             side, prob = "short", p_short
         if side is None:
             self._record_signal(symbol, "below_threshold", p_long=p_long, p_short=p_short)
+            return
+
+        ok, why = self.risk.can_open(len(self.positions), self.equity(), now)
+        if not ok:
+            self._record_signal(symbol, "risk_blocked", detail=why, side=side,
+                                p_long=p_long, p_short=p_short)
             return
         self._record_signal(symbol, f"enter_{side}", p_long=p_long, p_short=p_short)
 

@@ -7,8 +7,21 @@ exchange:
   id: binance
   # Top-liquidity USDT pairs only — the cost model (2 bps slippage) is honest
   # for majors; thinner pairs would trade worse than the backtest suggests.
+  #
+  # Eighteen, not ten, since 2026-08: ten pairs did not produce enough
+  # simultaneous candidates to fill the book. The ryzyko_100 variant showed it
+  # plainly — five slots, three positions, and 405 USDT of idle cash next to
+  # them. Measured before the change with scripts/research/universe.py (a model
+  # refitted before each window, and the pairs competing for one wallet the way
+  # the engine makes them): eighteen beat ten in all six paired comparisons,
+  # by +0.4 to +3.6 pp per window, and beat it per unit of exposure too, so it
+  # is not merely the wider board sitting in the market longer. Not one of those
+  # differences is statistically significant — consistent sign on a weak effect
+  # is the whole claim.
   symbols: [BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT, XRP/USDT,
-            DOGE/USDT, ADA/USDT, LINK/USDT, AVAX/USDT, LTC/USDT]
+            DOGE/USDT, ADA/USDT, LINK/USDT, AVAX/USDT, LTC/USDT,
+            DOT/USDT, TRX/USDT, ATOM/USDT, BCH/USDT,
+            XLM/USDT, UNI/USDT, ETC/USDT, NEAR/USDT]
   # 4h chosen from a 365-day, 4-pair sweep (2026-07): best OOS combo on the
   # last 60 days (+0.2% vs -12.5% buy&hold), stable across thresholds.
   # On 1m candles the median TP distance never clears round-trip costs.
@@ -48,8 +61,23 @@ paper:
 
 risk:
   position_pct: 0.10          # fraction of current equity per position
-  max_open_positions: 3   # 3 x 10% = max 30% equity exposure; crypto pairs are
-                          # highly correlated, so open positions cluster
+  max_open_positions: 5   # 5 x 10% = max 50% equity exposure; crypto pairs are
+                          # highly correlated, so open positions cluster.
+                          #
+                          # The cap is not a comfort setting — on the eighteen-pair
+                          # board it is the single strongest effect this project has
+                          # measured. Over ten 90-day windows (a model refitted before
+                          # each one, scripts/research/universe.py), a cap of 3 beat a
+                          # cap of 10 by +4.5 pp per window, 8 windows out of 10,
+                          # t = +2.7 to +3.5 — the only result here that clears the
+                          # usual significance bar. The mechanism: a wide board pays
+                          # as a pool to *choose from*, not as a list to fill. At 10
+                          # slots the book simply takes everything that signals (2609
+                          # trades against 1713 on ten pairs, at the same 80% time in
+                          # market), so the extra pairs buy turnover and fees, nothing
+                          # else — and widening the board actively hurts (-2.3 pp).
+                          # Three measured best; five is the chosen trade-off, keeping
+                          # more capital at work.
   daily_loss_limit_pct: 0.03  # kill-switch: stop opening positions after -3% day
 
 model:
@@ -73,10 +101,12 @@ variants:
   - {name: prog_065, prob_threshold: 0.65}
   # Risk-appetite A/B. Identical signal to prog_050 (the primary book) — only the
   # sizing differs: 5 x 20% = up to 100% of the account in the market, against
-  # prog_050's 3 x 10% = 30%. Everything else is held equal so the equity curves
-  # isolate one thing: what raising the appetite does.
+  # prog_050's 5 x 10% = 50%. Since 0.1.11 the two books share the same number of
+  # slots, so the comparison isolates position size alone — cleaner than before,
+  # when it varied both at once (5 slots vs 3) and the curves could not say which
+  # of the two was doing the damage.
   #
-  # Expect it to lose, and to lose more than 3.3x as fast. On the measured daily
+  # Expect it to lose, and to lose faster. On the measured daily
   # returns the crypto strategy's Kelly-optimal fraction is ~0.47 — below 1x — so
   # 100% exposure is roughly twice past the optimum, where the variance penalty
   # (L^2) overtakes the return (L). The point of this book is to make that visible

@@ -17,7 +17,10 @@ GOOD, BAD, MUTED = "#0ca30c", "#d03b3b", "#999999"
 REASON_PL = {
     "in_position": "trzyma pozycję",
     "warmup": "rozgrzewa się (zbiera dane)",
-    "risk_blocked": "wstrzymany limitem ryzyka",
+    # Only pairs that cleared the threshold reach this reason, so it is an
+    # opportunity turned away, not merely "the bot is idle" — and the p(long)
+    # column next to it now says how big an opportunity.
+    "risk_blocked": "widzi okazję, ale limit ryzyka nie pozwala",
     "features_nan": "czeka na komplet danych",
     "no_atr": "czeka na komplet danych",
     "below_threshold": "nie widzi wystarczającej okazji",

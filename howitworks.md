@@ -10,7 +10,7 @@ są o **zachowaniu**: co każdy komponent robi w kolejnych minutach, dniach i ty
 i co robi w przypadkach, w których nic ciekawego się nie dzieje — bo to jest jego
 domyślny stan.
 
-Wersja kodu, którą opisuje ten dokument: `0.1.9`.
+Wersja kodu, którą opisuje ten dokument: `0.1.11`.
 
 ---
 
@@ -205,7 +205,11 @@ Trzy proste reguły, świadomie bez finezji:
 - **wielkość pozycji** = `position_pct` × bieżący kapitał (nie początkowy — sizing
   sam się kurczy po stratach);
 - **sufit ekspozycji** = `max_open_positions`. Pary krypto są mocno skorelowane, więc
-  otwarte pozycje i tak zwykle idą w tę samą stronę; 3 × 10% = 30% konta w rynku;
+  otwarte pozycje i tak zwykle idą w tę samą stronę; 5 × 10% = 50% konta w rynku.
+  Sufit nie jest ustawieniem komfortu: na osiemnastu parach to **najsilniejszy
+  zmierzony efekt w tym projekcie** — limit 3 bije limit 10 o +4,5 pp na okno,
+  w 8 oknach na 10 (t = +2,7 do +3,5). Szeroka plansza płaci jako **pula do
+  wybierania**, nie jako lista do zapełnienia (§7.1);
 - **kill-switch dzienny**: po stracie zrealizowanej ≥ `daily_loss_limit_pct` startowego
   kapitału dnia — koniec nowych wejść do końca doby UTC. Istniejące pozycje dalej się
   domykają. Dzień jest częścią stanu (`snapshot`/`restore`), więc restart kontenera nie
@@ -262,9 +266,9 @@ jakie ma zasady, co robi w typowej turze i co się dzieje w przypadkach brzegowy
 
 | | |
 |---|---|
-| **Plansza** | 10 par USDT, każda niezależnie |
-| **Tura** | zamknięcie świecy 4h — 6 tur na dobę na parę, 60 decyzji dziennie łącznie |
-| **Ręka** | maksymalnie 3 otwarte pozycje jednocześnie, po 10% kapitału każda |
+| **Plansza** | 18 par USDT, każda niezależnie |
+| **Tura** | zamknięcie świecy 4h — 6 tur na dobę na parę, 108 decyzji dziennie łącznie |
+| **Ręka** | maksymalnie 5 otwartych pozycji jednocześnie, po 10% kapitału każda |
 | **Limit stołu** | 1 pozycja na parę — nie ma dokładania ani uśredniania |
 | **Kierunek** | domyślnie tylko long; `direction: long_short` włącza drugi model |
 | **Koniec tury** | take-profit, stop-loss, timeout po 12 barach (2 dni) albo przedłużenie |
@@ -335,9 +339,18 @@ Ranking powodów, od najczęstszego:
 |---|---|
 | `below_threshold` | model policzył prawdopodobieństwo, wyszło za mało — **stan normalny** |
 | `in_position` | ta para jest już zajęta |
-| `risk_blocked` | trzy pozycje otwarte albo kill-switch |
+| `risk_blocked` | para **chciała wejść**, ale sloty zajęte albo kill-switch |
 | `warmup` | bufor krótszy niż 300 barów (po świeżym starcie bez historii) |
 | `features_nan` / `no_atr` | dziura w danych albo świeca bez zakresu |
+
+Kolejność w silniku ma tu znaczenie i była kiedyś odwrotna. `_maybe_enter` pyta model
+**przed** sprawdzeniem limitu, choć policzenie predykcji kosztuje więcej niż zajrzenie
+do licznika pozycji. Powód jest diagnostyczny: przy starej kolejności zablokowana para
+nie miała jeszcze policzonego prawdopodobieństwa, więc panel pokazywał „wstrzymany
+limitem ryzyka" obok **pustej** kolumny `p(long)` — a to mogło równie dobrze znaczyć
+odrzuconą okazję 0,92, jak i niewypał 0,31. Do tego powód kłamał: przy pełnej książce
+pod `risk_blocked` lądowały też pary daleko poniżej progu, które i tak by nie weszły.
+Teraz `risk_blocked` to zawsze **realnie odrzucona okazja**, z liczbą obok.
 
 Panel czyta to jeden do jednego w zakładce „Model: dlaczego nie handluje". Nuda
 w dzienniku zdarzeń nie jest awarią — to jest domyślny tryb pracy tej strategii.
@@ -531,6 +544,30 @@ w ogóle ma przewagę", na trzech zasadach: rozłączne okna z modelem uczonym o
 ten sam model kosztów co produkcja, i **naiwne kontrole** (zawsze long, zawsze short,
 losowo, nie handluj). Strategia, która nie bije kontroli, niczego nie udowodniła.
 
+### 7.1 Backtest pary a backtest książki (`backtest/book.py`)
+
+`runner.py` liczy **jedną parę na osobnym rachunku, bez limitu pozycji**. To właściwe
+pytanie przy ocenie modelu i tak pyta bramka refreshera. Jest to jednak **niewłaściwe
+pytanie o planszę**: skoro każda para dostaje własny kapitał i własne nieograniczone
+sloty, dorzucenie par podnosi średnią z definicji — dopisuje kolejny rachunek, a nie
+kolejnego konkurenta. Żywa księga ma jeden portfel i `max_open_positions` miejsc.
+
+`book.py` liczy tę konkurencję: wspólna oś czasu wszystkich par, jedna gotówka, ten sam
+`RiskManager` co silnik (więc limit i kill-switch nie są tu pisane drugi raz) i jawna
+reguła przydziału — `fcfs` (kolejność z configu, czyli to, co robi silnik) albo
+`best_first` (wygrywa najwyższe prawdopodobieństwo). Zwraca jedną liczbę, której
+`runner.py` wyprodukować nie umie: **ile sygnałów książka wyrzuciła, bo nie miała
+wolnego slotu**. Przy 18 parach i limicie 3 to ~3000 kandydatów na 10 okien.
+
+Dwie świadome różnice wobec `runner.py`, obie w stronę silnika, bo to silnik jest tu
+modelowany: wielkość pozycji liczy się od **kapitału**, nie od gotówki (przy wspólnym
+portfelu wersja gotówkowa po cichu zmniejsza każdą kolejną pozycję), a tryb `maker` jest
+odrzucany wyjątkiem — zlecenie oczekujące trzymałoby slot albo nie, a w silniku nie ma
+odpowiedzi do skopiowania, bo silnik handluje taker.
+
+Czego ten moduł **nie** zmienia: bramka promocji w `refresh.py` dalej mierzy „model
+kontra naiwne kontrole" po parach. To inne pytanie i celowo zostało nietknięte.
+
 ---
 
 ## 8. Konfiguracja: co wchodzi na gorąco, a co wymaga restartu
@@ -723,7 +760,8 @@ src/trademon/
   features/    engineering.py  26 (+4) cech, wyłącznie z przeszłości
   labeling/    triple_barrier.py
   models/      train.py        walk-forward + purge, LightGBM lub fallback
-  backtest/    runner.py       event-driven, przez fills.py
+  backtest/    runner.py       event-driven, jedna para na osobnym rachunku
+               book.py         cała książka: wspólna gotówka i wspólny limit pozycji
                metrics.py      Sharpe, obsunięcie, ekspozycja, wynik od ryzykowanych
   execution/   fills.py        model kosztów — WSPÓLNY dla backtestu i produkcji
                executors.py    paper / live (CCXT)

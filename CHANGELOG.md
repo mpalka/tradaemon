@@ -3,6 +3,60 @@
 Najnowsze na górze. Numer wersji z tego pliku musi zgadzać się z `__version__`
 w `src/trademon/__init__.py` — pilnuje tego `tests/test_version.py`.
 
+## 0.1.11 — 2026-08-10
+
+- **Plansza rośnie z 10 do 18 par USDT** (dochodzą DOT, TRX, ATOM, BCH, XLM, UNI,
+  ETC, NEAR), a `max_open_positions` z 3 na **5**. Powód był widoczny w księgach:
+  `prog_050` z limitem podniesionym w panelu do 10 trzymał **9 z 10 par** przy 99 USDT
+  wolnej gotówki — plansza była wyczerpana.
+- **Najważniejszy wynik pomiaru dotyczy limitu, nie planszy.** Poszerzenie płaci
+  **wyłącznie przy ciasnym limicie**: +0,78 pp na okno przy limicie 3, −0,31 pp przy 5
+  i **−2,32 pp przy 10**. Sam limit to najsilniejszy zmierzony efekt w całym projekcie:
+  na osiemnastu parach limit 3 bije limit 10 o **+4,49 pp na okno, w 8 oknach na 10,
+  t = +2,73** (przy `best_first` t = +3,50) — jedyny wynik tutaj przekraczający zwykły
+  próg istotności. Mechanizm: szeroka plansza jest pulą **do wybierania**, nie listą do
+  zapełnienia; przy dziesięciu slotach książka bierze wszystko, co zasygnalizuje (2609
+  transakcji zamiast 1713 przy tej samej ekspozycji 80%), więc dodatkowe pary dokładają
+  wyłącznie obrót i prowizje. Wdrożone 18 par + limit 5: poszerzenie jest przy piątce
+  neutralne, ale piątka bije dziesiątkę na obu planszach, a trójka trzymałaby w rynku
+  o połowę mniej kapitału.
+- **Nowy backtest całej książki (`backtest/book.py`) i skrypt `scripts/book_backtest.py`.**
+  `runner.py` daje każdej parze osobny portfel i nieograniczone sloty, więc przy takim
+  liczeniu dorzucenie par podnosi średnią z definicji — dopisuje kolejny rachunek, a nie
+  konkurenta. `book.py` liczy jedną gotówkę, jeden limit i ten sam `RiskManager` co
+  silnik, i zwraca liczbę, której `runner.py` nie umie wyprodukować: ile sygnałów
+  książka wyrzuciła z braku wolnego slotu. Tryb `maker` odrzuca wyjątkiem, bo nie ma
+  w silniku odpowiedzi na to, czy niewypełniony limit trzyma slot. Bramka promocji
+  w `refresh.py` została nietknięta — mierzy inne pytanie.
+- **Zmierzone i odrzucone: oddawanie slotu najsilniejszemu sygnałowi.** Nowy
+  `scripts/research/universe.py` — model trenowany od nowa przed każdym oknem, osobno
+  dla każdej planszy, bo poszerzenie planszy poszerza też zbiór treningowy i to jest
+  część zmiany, a nie confounder do wyzerowania. Ranking po prawdopodobieństwie daje
+  **−0,6 do +0,7 pp**, pięć z sześciu porównań na zero albo minus — nie płaci nawet
+  tam, gdzie limit odrzuca 3000 kandydatów. Najprostsze wyjaśnienie: prawdopodobieństwo
+  z modelu jest zbyt słabo informatywne, żeby się nim dało sortować. Nie wdrożono.
+- **Skrypt badawczy nie może po cichu porównywać rzeczy z nią samą.** Pierwsza wersja
+  `universe.py` brała wąskie ramię z `config.exchange.symbols` — więc w chwili, w której
+  jego własny wniosek trafił do configu, „base" i „wide" stały się tymi samymi
+  osiemnastoma parami i skrypt wydrukował schludną tabelkę czterech identycznych co do
+  ostatniego miejsca po przecinku wierszy. Obie plansze są teraz przypięte w kodzie
+  (`--base` / `--add`), a identyczne ramiona kończą się błędem zamiast raportem.
+- **`risk_blocked` przestaje kłamać i zaczyna nieść liczbę.** `_maybe_enter` pyta model
+  **przed** sprawdzeniem limitu. Przy starej kolejności zablokowana para nie miała jeszcze
+  policzonego prawdopodobieństwa, więc panel pokazywał „wstrzymany limitem ryzyka" obok
+  pustej kolumny `p(long)` — co mogło znaczyć zarówno odrzuconą okazję 0,92, jak i
+  niewypał 0,31; a pod tym samym powodem lądowały pary daleko poniżej progu, które i tak
+  by nie weszły. Teraz `risk_blocked` to zawsze realnie odrzucona okazja, z jej
+  prawdopodobieństwem i stroną obok. Żadna transakcja się nie zmienia — `can_open` dalej
+  bramkuje każde wejście, tylko o jedno wywołanie później.
+- Dziennik zdarzeń w panelu pokazuje 60 wpisów zamiast 30: księga z pięcioma slotami
+  potrafi na jednej świecy zamknąć pięć pozycji i otworzyć pięć nowych, więc trzydzieści
+  wierszy to były trzy świece, czyli pół doby.
+- Naprawione przy okazji: `book.py` stemplował wejście świecą **sygnału**, a nie świecą
+  **wypełnienia** (wejście jest po `open` następnego bara, jak w `runner.py`), przez co
+  dziennik transakcji cofał każde wejście o jedną świecę i pozycje wyglądały na
+  zachodzące na siebie mimo trzymanego limitu.
+
 ## 0.1.10 — 2026-08-09
 
 - **Zdarzenia mają godzinę zamknięcia świecy, a nie jej otwarcia.** `bar["timestamp"]`
