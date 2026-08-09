@@ -20,6 +20,7 @@ import streamlit as st
 from trademon import __version__, config_store
 from trademon.backtest.metrics import (
     avg_exposure_pct,
+    exposure_series,
     max_drawdown,
     periods_per_year,
     return_on_risked_pct,
@@ -118,15 +119,14 @@ def money_at_work_pct(equity_df: pd.DataFrame) -> float:
     return avg_exposure_pct(ex["equity"], ex["cash"]) if len(ex) else 0.0
 
 
-def buy_hold_curve(equity_df: pd.DataFrame, initial: float,
-                   exposure: float = 1.0) -> pd.DataFrame:
+def buy_hold_curve(equity_df: pd.DataFrame, initial: float) -> pd.DataFrame:
     """Equal-weight buy&hold of all pairs from per-bar close prices logged
-    alongside equity — the benchmark the strategy must beat.
+    alongside equity — the all-in benchmark, everything in the market from the
+    first bar of the window.
 
-    `exposure` is the share of the account put in the market (the rest sits in cash
-    earning nothing). The default 1.0 is the all-in benchmark; passing the bot's own
-    average exposure compares like with like — otherwise the bot "wins" every
-    downturn simply by not having been there.
+    The bot never has the whole account in the market, so this line alone is not a
+    fair yardstick — it "loses" every downturn the bot simply was not there for.
+    `matched_exposure_curve` below is the like-for-like one.
     """
     if equity_df.empty or "close" not in equity_df:
         return pd.DataFrame()
@@ -136,8 +136,46 @@ def buy_hold_curve(equity_df: pd.DataFrame, initial: float,
     if wide.empty:
         return pd.DataFrame()
     ratio = wide.div(wide.iloc[0]).mean(axis=1)
-    bh = initial * ((1.0 - exposure) + exposure * ratio)
+    bh = initial * ratio
     return pd.DataFrame({"timestamp": bh.index, "equity": bh.values})
+
+
+def matched_exposure_curve(equity_df: pd.DataFrame, initial: float) -> pd.DataFrame:
+    """The same market ridden with the bot's own exposure, bar by bar: each bar earns
+    the basket's return times the share of the account the bot had in the market
+    going into it, the rest sitting in cash earning nothing.
+
+    Compounded per bar rather than scaled by one average, because one average is
+    wrong the moment the risk settings change mid-flight. A book that ran at 30% for
+    three weeks and then at 90% averages ~40%, which describes neither half — and the
+    average depends on the window, so switching 7 dni / 30 dni used to change the
+    *benchmark* and not just the period. Here the shape inside any stretch of the
+    curve is the same whichever window it is drawn in.
+
+    Exposure is lagged one bar on purpose: the engine journals `cash`/`equity` at
+    candle close, so the exposure stamped on bar *t* already knows how that bar went.
+    Multiplying it by bar *t*'s return would let the benchmark trade on the future.
+
+    Note that "Wynik od pieniędzy w grze" next to the chart still divides by the
+    window's *average* exposure (`return_on_risked_pct`) — a deliberately cruder
+    approximation, so the two numbers are not meant to line up exactly.
+    """
+    if equity_df.empty or "close" not in equity_df or "cash" not in equity_df:
+        return pd.DataFrame()
+    df = equity_df.copy()
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    wide = df.pivot_table(index="timestamp", columns="symbol", values="close").ffill()
+    if wide.empty:
+        return pd.DataFrame()
+    # Equal weight restored every bar — the weights of the buy&hold line above drift
+    # with the prices, and there is nothing to drift here: exposure is re-read anyway.
+    basket = wide.pct_change().mean(axis=1).fillna(0.0)
+    ex = book_exposure_series(df).set_index("timestamp")
+    expo = (exposure_series(ex["equity"], ex["cash"])
+            .reindex(basket.index).ffill().fillna(0.0))
+    growth = 1.0 + expo.shift(1).fillna(0.0) * basket
+    curve = initial * growth.cumprod()
+    return pd.DataFrame({"timestamp": curve.index, "equity": curve.values})
 
 
 def with_live_point(equity_df: pd.DataFrame, state: dict) -> pd.DataFrame:
@@ -262,12 +300,14 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
     cash = float(state.get("cash", initial))
     invested = max(eq - cash, 0.0)
     change = (eq / initial - 1.0) * 100.0
+    # Read here, shown twice: next to "Ile masz" and again under the chart, where it
+    # answers why the fair benchmark can sit far from the all-in one.
+    now_at_work = (invested / eq * 100.0) if eq else 0.0
 
     # 1) Ile masz
     top = st.columns([2, 3])
     with top[0]:
         st.metric("Ile masz (wirtualne $)", humanize.money2(eq), f"{change:+.2f}% od startu")
-        now_at_work = (invested / eq * 100.0) if eq else 0.0
         st.caption(f"💵 wolne: {humanize.money2(cash)} · 📈 w grze: "
                    f"{humanize.money2(invested)} (**{now_at_work:.0f}% pieniędzy**)  ·  "
                    f"tryb **paper** (ćwiczebny, nie prawdziwe pieniądze)")
@@ -301,18 +341,20 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
         at_work = money_at_work_pct(win)
         scale = strat_eq["equity"].iloc[0] / initial  # rebase to the window start
         bh = buy_hold_curve(win, initial)
-        bh_fair = buy_hold_curve(win, initial, exposure=at_work / 100.0)
+        bh_fair = matched_exposure_curve(win, initial)
         if len(bh):
             bh = bh.assign(equity=bh["equity"] * scale)
         if len(bh_fair):
             bh_fair = bh_fair.assign(equity=bh_fair["equity"] * scale)
         st.altair_chart(equity_chart(strat_eq, bh, bh_fair), width="stretch")
         st.caption(
-            f"Obie szare linie to „kup i trzymaj\", czyli kupić raz i czekać. Bot trzymał "
-            f"w rynku średnio **{at_work:.0f}% pieniędzy**, więc uczciwe porównanie to "
-            f"**ciemna** linia — ktoś, kto włożył tyle samo co on. Jasną linię (wszystkie "
-            f"pieniądze w rynku) bot łatwo bije w spadkach, ale nie dlatego, że jest mądry "
-            f"— po prostu go tam nie było."
+            f"Obie szare linie to ten sam rynek, kupiony i trzymany. **Jasna** wkłada w "
+            f"niego wszystkie pieniądze — bot łatwo bije ją w spadkach, ale nie dlatego, "
+            f"że jest mądry, tylko dlatego, że go tam nie było. **Ciemna** wkłada dokładnie "
+            f"tyle, ile w danej chwili miał w rynku bot, i to ona jest uczciwym "
+            f"porównaniem. W tym okresie trzymał w rynku średnio **{at_work:.0f}% "
+            f"pieniędzy** (teraz: **{now_at_work:.0f}%**) — im mniej, tym bliżej ciemna "
+            f"linia leży prostej gotówki i tym dalej od jasnej."
         )
         # The same result counted two ways: idle cash makes the first number look gentler.
         win_return = (strat_eq["equity"].iloc[-1] / strat_eq["equity"].iloc[0] - 1.0) * 100.0

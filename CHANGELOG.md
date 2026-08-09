@@ -3,6 +3,27 @@
 Najnowsze na górze. Numer wersji z tego pliku musi zgadzać się z `__version__`
 w `src/trademon/__init__.py` — pilnuje tego `tests/test_version.py`.
 
+## 0.1.12 — 2026-08-10
+
+- **Ciemna linia na „Jak to szło" idzie teraz za ekspozycją bota świeca po świecy**
+  (`matched_exposure_curve`), zamiast skalować cały koszyk jedną średnią z okna. Stara
+  wersja rozjeżdżała się dokładnie wtedy, kiedy ustawienia ryzyka zmieniały się
+  w locie: książka, która trzy tygodnie chodziła na 30%, a potem na 90%, dostawała
+  benchmark dla ~40% — nietrafiony w obie połowy. Gorzej, ta średnia zależała od
+  wybranego zakresu, więc **przełączenie 7 dni / 30 dni zmieniało nie tylko okres, ale
+  i samą miarę** (31% vs 39% ekspozycji), a werdykt „bot bije / nie bije" potrafił się
+  przez to odwrócić. Teraz kształt linii w danym odcinku jest ten sam niezależnie od
+  okna, a podniesienie ryzyka widać w benchmarku od razu.
+- Ekspozycja wchodzi do wzoru **opóźniona o świecę**: silnik zapisuje `cash` przy
+  zamknięciu świecy, więc ta z indeksu `t` wie już, jak `t` poszło — bez przesunięcia
+  benchmark handlowałby ruchem, na którym jest mierzony.
+- **Podpis pod wykresem pokazuje obie liczby ekspozycji** — średnią z okna i stan
+  bieżący. Nagłówek czyta chwilowe `(equity-cash)/equity` ze `state.json`, wykres
+  średnią z księgi, i po zmianie ustawień te dwie liczby rozjeżdżały się bez słowa
+  wyjaśnienia (90% w nagłówku, 31% pod wykresem).
+- `buy_hold_curve` traci parametr `exposure` — jasna linia zawsze była wywołaniem
+  domyślnym, a ciemna ma teraz własną funkcję.
+
 ## 0.1.11 — 2026-08-10
 
 - **Plansza rośnie z 10 do 18 par USDT** (dochodzą DOT, TRX, ATOM, BCH, XLM, UNI,

@@ -85,7 +85,7 @@ def test_summarize_reports_exposure_only_when_cash_is_known():
     assert honest["return_on_risked_pct"] == pytest.approx(-4.0)
 
 
-def test_buy_hold_curve_can_match_the_bots_exposure():
+def test_buy_hold_curve_is_the_all_in_benchmark():
     # imported here: dashboard.app runs streamlit setup at import time
     from trademon.dashboard.app import buy_hold_curve
 
@@ -96,16 +96,8 @@ def test_buy_hold_curve_can_match_the_bots_exposure():
         "equity": [1000.0, 1000.0],
         "cash": [1000.0, 1000.0],
     })
-    default = buy_hold_curve(df, 1000.0)
-    assert list(default["equity"]) == pytest.approx([1000.0, 2000.0])
-    # regression: the default must stay the all-in benchmark
-    assert list(buy_hold_curve(df, 1000.0, exposure=1.0)["equity"]) == pytest.approx(
-        list(default["equity"]))
-    # nothing in the market -> a flat line; a quarter in -> a quarter of the move
-    assert list(buy_hold_curve(df, 1000.0, exposure=0.0)["equity"]) == pytest.approx(
-        [1000.0, 1000.0])
-    assert list(buy_hold_curve(df, 1000.0, exposure=0.25)["equity"]) == pytest.approx(
-        [1000.0, 1250.0])
+    # the whole account rides the whole move, whatever the book was doing
+    assert list(buy_hold_curve(df, 1000.0)["equity"]) == pytest.approx([1000.0, 2000.0])
 
 
 def test_build_books_default_and_variants(cfg):
