@@ -3,6 +3,31 @@
 Najnowsze na górze. Numer wersji z tego pliku musi zgadzać się z `__version__`
 w `src/trademon/__init__.py` — pilnuje tego `tests/test_version.py`.
 
+## 0.1.10 — 2026-08-09
+
+- **Zdarzenia mają godzinę zamknięcia świecy, a nie jej otwarcia.** `bar["timestamp"]`
+  z ccxt to czas *otwarcia*, a świeca trafia do silnika dopiero po domknięciu —
+  więc każdy wpis w dzienniku, każda transakcja i każdy punkt krzywej kapitału był
+  cofnięty o cały timeframe. Przy 4h wyglądało to tak, jakby bot przestał
+  cokolwiek robić cztery godziny temu: transakcje ze świecy zamkniętej o 22:00
+  leżały pod godziną 18:00. Poprawka to jedna linijka w `Book.on_candle`, ale
+  przechodzi przez nią wszystko — dziennik, `trades.jsonl`, `equity.jsonl`,
+  `deadline` pozycji, `updated_at` w `state.json` i granica doby dla kill-switcha.
+  `last_candle_ts` zostaje czasem otwarcia, bo `bot_status` i `live_drift` same
+  dodają timeframe; dwie konwencje w sąsiednich linijkach są teraz opisane
+  komentarzem. Jednorazowy koszt: na styku starych i nowych zapisów historia
+  equity przeskakuje o 4 h, a pozycje otwarte przed wdrożeniem mogą wygasnąć
+  o jedną świecę wcześniej.
+- **Wykres pokazuje ostatnie wejścia.** Znaczniki transakcji były przycinane do
+  prawej krawędzi notowań, a notowania dociąga `refresher` raz na tydzień —
+  więc wszystko, co bot zrobił od ostatniego pobrania, znikało z wykresu.
+  Przycinamy już tylko od lewej (wybrany zakres). Sama linia kursu też nie
+  kończy się w zeszłym tygodniu: `crypto_prices` przedłuża zapisane świece
+  zamknięciami, które silnik i tak journaluje przy equity.
+- Wpis o zmianie ustawień ma w dzienniku ikonę ⚙️ zamiast gołej kropki,
+  a lista zdarzeń pokazuje 30 wierszy zamiast 15 — przy dziesięciu parach
+  i dziesięciu pozycjach jedna świeca potrafi zapisać kilkanaście wierszy.
+
 ## 0.1.9 — 2026-08-08
 
 - `strategy.timeout_rollover` nazywa się teraz `strategy.rollover` i ma jawny

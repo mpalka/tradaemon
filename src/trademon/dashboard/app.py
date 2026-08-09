@@ -361,7 +361,11 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
     st.subheader("Dziennik zdarzeń")
     if len(alerts):
         st.caption("Kliknij zdarzenie, aby zobaczyć kurs w tamtym momencie.")
-        rows = journals.records(alerts.sort_values("timestamp", ascending=False).head(15))
+        # Thirty, not fifteen: ten pairs against a ten-position limit can write
+        # a dozen rows on a single candle, and a shorter list would show barely
+        # one candle of history — the same "nothing older happened" impression
+        # the backdated timestamps used to give.
+        rows = journals.records(alerts.sort_values("timestamp", ascending=False).head(30))
         for n, rec in enumerate(rows):
             e = humanize.event_line(rec, DISPLAY_TZ)
             sym = rec.get("symbol")

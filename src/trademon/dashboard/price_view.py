@@ -179,6 +179,22 @@ def open_position_point(pos: dict | None, start=None, end=None) -> pd.DataFrame:
     return _in_window(row, start, end)
 
 
+def chart_marks(trades: pd.DataFrame | None, symbol: str, pos: dict | None,
+                start=None) -> pd.DataFrame:
+    """Every fill worth drawing for one instrument: closed round trips plus the
+    position still open, in time order.
+
+    Clipped at the start — the reader chose a range — and deliberately left open at
+    the end. The window's right edge is wherever the price history stops, and the
+    downloader runs weekly while the bot trades every candle, so the newest fills
+    routinely sit past it. Those are the ones a reader is looking for; cutting them
+    is what made the chart omit the last entries.
+    """
+    return pd.concat([trade_points(trades, symbol, start),
+                      open_position_point(pos, start)],
+                     ignore_index=True).sort_values("timestamp").reset_index(drop=True)
+
+
 # ---------- price sources ----------
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -198,17 +214,37 @@ def closes(path: Path) -> pd.DataFrame:
 
 
 def crypto_prices(symbol: str, fallback: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Stored candles for a pair, falling back to the closes the engine journals
-    alongside equity — a pair can be traded before its Parquet file is downloaded."""
+    """Stored candles for a pair, extended with the closes the engine journals
+    alongside equity.
+
+    The journal is not only a fallback for a pair whose Parquet file does not exist
+    yet — it is what keeps the chart current. The downloader runs weekly
+    (`docker-compose.yml`, the `refresher` service), so the stored candles can end
+    six days before the bot's newest trade, and a line that stops there makes every
+    fill since look like it never happened. The engine writes one close per pair per
+    candle, so everything past the Parquet's last row is already on disk.
+
+    The seam is worth naming: stored candles are indexed by their OPEN time and the
+    engine journals by CLOSE, so the two conventions meet one timeframe apart. On a
+    chart spanning days that is invisible, and the alternative — a line that ends
+    last Tuesday — is not."""
     df = closes(storage.ohlcv_path(cfg.paths.data_dir, cfg.exchange.id, symbol,
                                    cfg.exchange.timeframe))
-    if len(df):
+    if fallback is None or not len(fallback) or not {"symbol", "close"} <= set(fallback):
         return df
-    if fallback is not None and len(fallback) and {"symbol", "close"} <= set(fallback):
-        rows = fallback[fallback["symbol"] == symbol]
-        if len(rows):
-            return rows[PRICE_COLUMNS].reset_index(drop=True)
-    return pd.DataFrame(columns=PRICE_COLUMNS)
+    rows = fallback[fallback["symbol"] == symbol]
+    if not len(rows):
+        return df
+    rows = rows[PRICE_COLUMNS].copy()
+    rows["timestamp"] = pd.to_datetime(rows["timestamp"], utc=True)
+    if len(df):
+        rows = rows[rows["timestamp"] > pd.to_datetime(df["timestamp"], utc=True).max()]
+        if not len(rows):
+            return df
+        df = pd.concat([df, rows], ignore_index=True)
+    else:
+        df = rows
+    return df.sort_values("timestamp").reset_index(drop=True)
 
 
 def portfolio_prices(data_dir: Path, symbol: str) -> pd.DataFrame:
@@ -346,13 +382,9 @@ def render(section: str, prices_for: Callable[[str], pd.DataFrame],
             return
 
         pos = (positions or {}).get(symbol) or {}
-        first, last = win["timestamp"].iloc[0], win["timestamp"].iloc[-1]
-        # Closed round trips and the position still open are two sources for one
-        # picture; drawing only the first was what made the chart contradict the
-        # card above it.
-        held = open_position_point(pos, first, last)
-        marks = pd.concat([trade_points(trades, symbol, first, last), held],
-                          ignore_index=True).sort_values("timestamp")
+        first = win["timestamp"].iloc[0]
+        marks = chart_marks(trades, symbol, pos, first)
+        held = marks[marks["typ"] == HELD]
         st.altair_chart(_chart(win, marks, pos.get("entry_price"), at), width="stretch")
 
         change = (float(win["close"].iloc[-1]) / float(win["close"].iloc[0]) - 1.0) * 100.0

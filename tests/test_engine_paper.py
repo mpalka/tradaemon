@@ -274,6 +274,47 @@ def test_seed_buffer_counts_as_having_read_the_market(engine, cfg):
     assert engine.last_candle_ts["BTC/USDT"] == df["timestamp"].iloc[-1].isoformat()
 
 
+def test_events_are_stamped_when_the_candle_closed(cfg, tmp_path):
+    """The regression behind "the journal skips the newest candle".
+
+    A candle reaches the engine only once it has closed, so its OPEN time — what
+    ccxt puts in the row — is a full timeframe before anything was decided. Every
+    journal row used to carry it: on 4h bars the trades from the candle that closed
+    at 22:00 were filed under 18:00, and the panel looked hours behind while being
+    perfectly up to date. A 4h timeframe over 1m candles is deliberate here: it
+    makes the shift impossible to confuse with the next candle's open time.
+
+    `last_candle_ts` keeps the open time on purpose — `humanize.bot_status` and
+    `config_store.live_drift` add the timeframe back themselves — so this pins both
+    conventions at once.
+    """
+    cfg.exchange.symbols = ["BTC/USDT"]
+    cfg.exchange.timeframe = "4h"
+    book = Book("default", cfg, FakeBundle(prob=0.0), PaperExecutor(cfg),
+                RuntimeStore(tmp_path / "runtime"))
+    df = make_ohlcv(cfg.strategy.warmup_bars + 5)
+    feed(book, df.iloc[:-1])          # warm up without ever signalling an entry
+    assert not book.positions
+
+    book.bundles = {"long": FakeBundle(prob=0.99)}   # the last candle is the entry
+    last_open = df["timestamp"].iloc[-1]
+    closed_at = last_open + pd.Timedelta(hours=4)
+    book.on_candle("BTC/USDT", df.iloc[-1].to_dict())
+
+    assert book.positions["BTC/USDT"].entry_time == closed_at
+    opens = [json.loads(x) for x in book.store.alerts_path.read_text().splitlines()]
+    opens = [a for a in opens if a["kind"] == "trade_open"]
+    assert len(opens) == 1
+    assert datetime.fromisoformat(opens[0]["timestamp"]) == closed_at
+
+    equity = [json.loads(x) for x in book.store.equity_path.read_text().splitlines()]
+    assert datetime.fromisoformat(equity[-1]["timestamp"]) == closed_at
+
+    state = json.loads(book.store.state_path.read_text())
+    assert datetime.fromisoformat(state["updated_at"]) == closed_at
+    assert state["last_candle_ts"]["BTC/USDT"] == last_open.isoformat()  # still the open
+
+
 class FlakyExchange:
     """Fails `fail_times` times, then serves candles — a DNS outage at startup."""
 

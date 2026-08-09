@@ -198,6 +198,33 @@ def test_a_held_position_follows_the_exit_it_was_reopened_after():
     assert marks["typ"].iloc[-1] == pv.HELD   # the story no longer ends on an exit
 
 
+def test_the_newest_fills_survive_a_price_history_that_stopped_earlier():
+    """Why the chart "did not show the last entries".
+
+    The candle downloader runs weekly and the bot trades every candle, so fills
+    routinely land after the last stored price. Marks used to be clipped to the
+    price window's right edge, which dropped exactly those.
+    """
+    trades = pd.DataFrame([{
+        "symbol": "BTC/USDT", "entry_time": "2026-08-09T04:00:00+00:00",
+        "exit_time": None, "entry_price": 65000.0, "exit_price": None,
+    }])
+    pos = {"entry_time": "2026-08-09T04:00:00+00:00", "entry_price": 65000.0}
+    # the stored candles end two days before both
+    marks = pv.chart_marks(trades, "BTC/USDT", pos, start="2026-08-02T00:00:00+00:00")
+    assert list(marks["typ"]) == [pv.ENTRY, pv.HELD]
+
+
+def test_chart_marks_still_clips_the_range_the_reader_chose():
+    trades = pd.DataFrame([{
+        "symbol": "BTC/USDT", "entry_time": "2026-01-01T00:00:00+00:00",
+        "exit_time": "2026-01-02T00:00:00+00:00",
+        "entry_price": 40000.0, "exit_price": 41000.0,
+    }])
+    assert pv.chart_marks(trades, "BTC/USDT", None,
+                          start="2026-08-01T00:00:00+00:00").empty
+
+
 def test_a_held_position_outside_the_window_is_not_drawn():
     pos = {"entry_time": "2026-01-01T00:00:00+00:00", "entry_price": 40000.0}
     assert pv.open_position_point(pos, start="2026-06-01T00:00:00+00:00",
@@ -231,3 +258,25 @@ def test_crypto_prices_falls_back_to_the_equity_journal(monkeypatch, tmp_path):
     out = pv.crypto_prices("ETH/USDT", equity)
     assert list(out["close"]) == [1917.4]
     assert pv.crypto_prices("SOL/USDT", equity).empty
+
+
+def test_crypto_prices_extends_stale_candles_with_the_engines_own_closes(monkeypatch,
+                                                                        tmp_path):
+    """The downloader runs weekly, the bot trades every candle. A chart that stops
+    where the Parquet stops is days behind the trades drawn on top of it."""
+    monkeypatch.setattr(pv.cfg.paths, "data_dir", tmp_path)
+    stored = pd.DataFrame({
+        "timestamp": pd.to_datetime(["2026-08-05T12:00:00+00:00",
+                                     "2026-08-05T16:00:00+00:00"], utc=True),
+        "close": [64000.0, 64200.0],
+    })
+    monkeypatch.setattr(pv, "closes", lambda path: stored.copy())
+    equity = pd.DataFrame([
+        # already covered by the Parquet — must not be duplicated
+        {"timestamp": "2026-08-05T16:00:00+00:00", "symbol": "BTC/USDT", "close": 64200.0},
+        {"timestamp": "2026-08-07T20:00:00+00:00", "symbol": "BTC/USDT", "close": 64900.0},
+        {"timestamp": "2026-08-07T20:00:00+00:00", "symbol": "ETH/USDT", "close": 1917.4},
+    ])
+    out = pv.crypto_prices("BTC/USDT", equity)
+    assert list(out["close"]) == [64000.0, 64200.0, 64900.0]
+    assert str(out["timestamp"].iloc[-1]) == "2026-08-07 20:00:00+00:00"

@@ -370,8 +370,17 @@ class Book:
         buf["timestamp"] = pd.to_datetime(buf["timestamp"], utc=True)
         self.buffers[symbol] = buf
         self.last_close[symbol] = float(bar["close"])
+        # Two clocks in two neighbouring lines, on purpose. `last_candle_ts` keeps
+        # the candle's OPEN time, because that is the OHLCV convention and both
+        # readers of it — humanize.bot_status and config_store.live_drift — add the
+        # timeframe back themselves. Everything the engine *does* is stamped with
+        # the CLOSE, because a candle only reaches this method once it has closed
+        # and that is when the decision is taken. Stamping decisions with the open
+        # backdated the whole event journal by a full timeframe: on 4h bars the
+        # trades from the candle that closed at 22:00 were filed under 18:00, so
+        # the newest candle read as missing.
         self.last_candle_ts[symbol] = bar["timestamp"].isoformat()
-        now: datetime = bar["timestamp"].to_pydatetime()
+        now: datetime = bar["timestamp"].to_pydatetime() + self._bar_delta
 
         self._maybe_reload_models()
         self._maybe_reload_config(now)
