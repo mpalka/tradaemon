@@ -11,6 +11,10 @@ Two speeds of change, made explicit in the UI rather than left as a footgun:
 * fields the engine re-reads each candle take effect on the next bar (⚡)
 * fields read once at startup need the engine to come back (🔄) — the screen writes a
   flag, the engine persists its books and exits, and Docker restarts it
+
+A third asymmetry sits underneath both, and only the risk fields have it: raising the
+exposure ceiling takes effect on the next candle, while lowering it takes effect when
+the extra positions happen to close. `_ceiling_dialog` is the one place that says so.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ from pydantic import ValidationError
 
 from trademon import config_store
 from trademon.config import Config, config_path
-from trademon.dashboard import auth, humanize, layout
+from trademon.dashboard import auth, humanize, journals, layout
 from trademon.data.storage import TIMEFRAME_MS
 from trademon.portfolio.config import PortfolioConfig
 from trademon.portfolio.config import _find_config_path as _portfolio_config_path
@@ -96,7 +100,10 @@ CRYPTO_SECTIONS: dict[str, list[Field]] = {
               min=0.01, max=1.0, step=0.01, fmt="%.2f"),
         Field("risk.max_open_positions", "Maksimum otwartych pozycji", "int",
               "Razem z powyższym wyznacza maksymalną ekspozycję. Pary krypto są mocno "
-              "skorelowane, więc otwarte pozycje zwykle zachowują się podobnie.",
+              "skorelowane, więc otwarte pozycje zwykle zachowują się podobnie. "
+              "Uwaga: ta zmiana działa niesymetrycznie — w górę wchodzi już przy "
+              "najbliższej świecy, w dół dopiero wtedy, gdy nadmiarowe pozycje same "
+              "się zamkną.",
               min=1, max=20, step=1),
         Field("risk.daily_loss_limit_pct", "Dzienny limit straty", "float",
               humanize.GLOSSARY["Kill-switch"], min=0.005, max=0.5, step=0.005, fmt="%.3f"),
@@ -161,6 +168,98 @@ PORTFOLIO_SECTIONS: dict[str, list[Field]] = {
 }
 
 
+# ---------- what raising the ceiling would let in ----------
+
+@dataclass(frozen=True)
+class BookSlots:
+    """One book's slot situation, as the engine last left it in `state.json`."""
+    name: str
+    taken: int                  # positions currently open
+    cap: int                    # the limit the engine is really trading on
+    queued: int                 # pairs that cleared the threshold and were turned away
+    top_p: float | None         # the best probability among those
+    position_pct: float
+
+    @property
+    def free(self) -> int:
+        return max(0, self.cap - self.taken)
+
+
+def book_slots(states: dict[str, dict]) -> list[BookSlots]:
+    """Read the slot picture off the books' live state.
+
+    `queued` counts only pairs turned away *by the cap*. `risk_blocked` also covers the
+    kill-switch (`RiskManager.can_open` returns both), and those pairs would not enter
+    however high the limit went — counting them would promise positions that a raise
+    cannot deliver.
+
+    Counting them at all is new: until 0.1.12 the engine checked the cap before asking
+    the model, so a blocked pair had no probability attached and `risk_blocked` could
+    equally mean a 0.92 opportunity or a 0.31 non-event. Now it is always the former.
+    """
+    slots = []
+    for name, state in states.items():
+        live = state.get("live_config") or {}
+        cap = live.get("risk.max_open_positions")
+        pct = live.get("risk.position_pct")
+        if cap is None or pct is None:
+            continue  # a book from before live_config; nothing honest to say about it
+        blocked = [s for s in (state.get("signals") or {}).values()
+                   if s.get("reason") == "risk_blocked"
+                   and str(s.get("detail", "")).startswith("max_open_positions")]
+        probs = [s["p_long"] for s in blocked if s.get("p_long") is not None]
+        slots.append(BookSlots(
+            name=name, taken=len(state.get("positions") or {}), cap=int(cap),
+            queued=len(blocked), top_p=max(probs) if probs else None,
+            position_pct=float(pct),
+        ))
+    return slots
+
+
+def slot_lines(slots: list[BookSlots]) -> list[str]:
+    """One sentence per book: how full it is, and what a free slot would cost.
+
+    The queue count sits after a colon rather than in a phrase, the same dodge
+    `humanize._ago` uses: "2 pary czekają" and "5 par czeka" is a declension rule this
+    line does not need to know.
+    """
+    lines = []
+    for s in slots:
+        head = f"**{s.name}** · {s.taken} z {s.cap} miejsc zajętych"
+        if s.queued:
+            top = f" (najwyżej {s.top_p:.2f})".replace(".", ",") if s.top_p is not None else ""
+            lines.append(f"{head}, w kolejce z sygnałem: **{s.queued}**{top}. Każde "
+                         f"miejsce więcej to jedna pozycja przy najbliższej świecy, "
+                         f"po {s.position_pct:.0%} konta.")
+        elif s.free:
+            lines.append(f"{head} — w kolejce nikt nie czeka, więc podniesienie limitu "
+                         f"nic dziś nie zmieni.")
+        else:
+            lines.append(f"{head} — książka pełna, ale żadna para nie przekracza progu.")
+    return lines
+
+
+def ceiling_change(current: dict, changes: dict) -> tuple[float, float] | None:
+    """(ceiling before, ceiling after) when a save *raises* max exposure — else None.
+
+    The ceiling is `position_pct × max_open_positions`: what share of the account can
+    be in the market at once. Both halves matter, so 5 × 10% → 5 × 20% is as much of a
+    raise as 5 × 10% → 10 × 10%, and the screen must not treat one as routine.
+
+    Only raises are worth a question. Lowering the limit is not the dangerous
+    direction — it is also not the safe one people assume, but that is a caption's job
+    (nothing gets closed), not a dialog's.
+    """
+    pct_now = config_store.get_path(current, "risk.position_pct")
+    cap_now = config_store.get_path(current, "risk.max_open_positions")
+    if pct_now is None or cap_now is None:
+        return None  # portfolio scope: no such thing here
+    pct_new = changes.get("risk.position_pct", pct_now)
+    cap_new = changes.get("risk.max_open_positions", cap_now)
+    before, after = float(pct_now) * int(cap_now), float(pct_new) * int(cap_new)
+    return (before, after) if after > before else None
+
+
 # ---------- widgets ----------
 
 def _widget(f: Field, current: Any, key: str) -> Any:
@@ -222,6 +321,11 @@ def _render_section(
 
     defaults_filled = effective_values(effective, model_cls)
     with st.expander(header, expanded=bool(overridden)):
+        # Said before the fields, not after the save: a form does not re-run while you
+        # type, so the screen cannot react to the number being entered — but it can say
+        # what the current one is already holding back.
+        if scope == "crypto" and title == "Ryzyko":
+            _render_slot_queue(runtime_dir)
         with st.form(f"form_{scope}_{title}"):
             values: dict[str, Any] = {}
             for f in fields:
@@ -239,7 +343,10 @@ def _render_section(
                 except (TypeError, ValueError):
                     st.error(f"Nie rozumiem wartości pola „{f.label}\".")
                     return
-            _apply(cfg_path, runtime_dir, changes, model_cls, scope)
+            if raised := ceiling_change(defaults_filled, changes):
+                _ceiling_dialog(cfg_path, runtime_dir, changes, model_cls, scope, raised)
+            else:
+                _apply(cfg_path, runtime_dir, changes, model_cls, scope)
 
         if overridden and st.button(f"Przywróć domyślne w „{title}\"",
                                     key=f"reset_{scope}_{title}"):
@@ -302,6 +409,53 @@ def _render_drift(cfg_path: Path, runtime_dir: Path) -> None:
     elif drift:
         st.info("⚡ Silnik przyjmie nowe ustawienia przy najbliższej świecy. "
                 "Do tego czasu handluje na poprzednich.")
+
+
+def _render_slot_queue(runtime_dir: Path) -> None:
+    """What the limit is holding back right now, per book."""
+    try:
+        slots = book_slots(journals.book_states(runtime_dir))
+    except (OSError, ValueError):
+        return  # a missing or half-written runtime must not take down the edit form
+    if not slots:
+        return
+    st.markdown("\n".join(f"- {line}" for line in slot_lines(slots)))
+    st.caption("Liczby są z ostatniej świecy każdej księgi.")
+
+
+# ---------- raising the exposure ceiling ----------
+
+@st.dialog("Podnosisz sufit ekspozycji")
+def _ceiling_dialog(cfg_path: Path, runtime_dir: Path, changes: dict,
+                    model_cls: type, scope: str, raised: tuple[float, float]) -> None:
+    """Ask before the ceiling goes up, because the answer arrives one candle later and
+    cannot be taken back.
+
+    Written after 9–10.08.2026: `max_open_positions` went 5 → 10 at 17:51 UTC and back
+    to 5 at 22:43, but the candle in between had already opened four extra positions
+    and pushed the book from 50% to 90% of the account. They stayed after the setting
+    was reverted, three of them stopped out, and they cost 7.07 USDT — half of the
+    whole drawdown. Neither half of that was visible from this screen: not how many
+    pairs were queued for the new slots, and not that lowering the number back closes
+    nothing.
+    """
+    before, after = raised
+    st.markdown(f"Z **{before:.0%} konta** na **{after:.0%} konta** naraz w rynku.")
+    try:
+        slots = book_slots(journals.book_states(runtime_dir))
+    except (OSError, ValueError):
+        slots = []
+    if slots:
+        st.markdown("\n".join(f"- {line}" for line in slot_lines(slots)))
+    st.warning("Powrót do niższej wartości **nie zamyka niczego** — pozycje otwarte "
+               "przy wyższym limicie żyją do celu, bezpiecznika albo terminu. "
+               "9.08 limit podniesiony na pięć godzin zdążył otworzyć cztery pozycje; "
+               "kosztowały 7 USDT długo po tym, jak wrócił na swoje miejsce.")
+    c1, c2 = st.columns(2)
+    if c1.button("Zapisz mimo to", type="primary", width="stretch"):
+        _apply(cfg_path, runtime_dir, changes, model_cls, scope)
+    if c2.button("Anuluj", width="stretch"):
+        st.rerun()
 
 
 # ---------- restart handshake ----------

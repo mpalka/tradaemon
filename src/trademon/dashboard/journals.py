@@ -68,6 +68,31 @@ def load_jsonl(path: Path) -> pd.DataFrame:
     return _parse_jsonl(str(path), _fingerprint(path))
 
 
+def book_states(runtime_dir: Path) -> dict[str, dict]:
+    """Every crypto book's `state.json`, keyed by book name (`app.discover_books`
+    rules: the default engine writes to `runtime/`, A/B variants to `runtime/<name>/`,
+    and `runtime/portfolio/` belongs to the other module).
+
+    It lives here rather than in `app.py` so the config screen can read live state
+    without importing `app` — `app` imports `config_view`, and the reverse edge would
+    close a cycle at import time.
+
+    Uncached on purpose, unlike everything else in this module: a state file is a few
+    kB and the ticker rewrites it every 60 s, so fingerprinting it would cost about as
+    much as reading it and would serve a stale slot count half the time. Partial reads
+    are not a risk — `RuntimeStore.save_state` writes a temp file and `os.replace`s it.
+    """
+    states: dict[str, dict] = {}
+    if (runtime_dir / "state.json").exists():
+        states["default"] = json.loads((runtime_dir / "state.json").read_text())
+    for sub in sorted(p for p in runtime_dir.glob("*/") if p.is_dir()):
+        if sub.name == "portfolio":
+            continue
+        if (sub / "state.json").exists():
+            states[sub.name] = json.loads((sub / "state.json").read_text())
+    return states
+
+
 def records(df: pd.DataFrame) -> list[dict]:
     """Rows as dicts, with absent fields absent — not present as NaN.
 

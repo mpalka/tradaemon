@@ -3,6 +3,31 @@
 Najnowsze na górze. Numer wersji z tego pliku musi zgadzać się z `__version__`
 w `src/trademon/__init__.py` — pilnuje tego `tests/test_version.py`.
 
+## 0.1.13 — 2026-08-10
+
+- **Podniesienie sufitu ekspozycji pyta, zanim wejdzie.** Okno z potwierdzeniem łapie
+  każdy wzrost iloczynu `position_pct × max_open_positions` — 5 × 10% → 10 × 10% tak
+  samo jak 5 × 10% → 5 × 20% — i mówi to, czego ekran wcześniej nie mówił: że skutek
+  przychodzi jedną świecą później, a **powrót do niższej wartości niczego nie zamyka**.
+  Obniżenie limitu zapisuje się bez pytania.
+- **Sekcja „Ryzyko" pokazuje kolejkę do zwolnionego miejsca**: ile par przekroczyło
+  próg i zostało odrzuconych przez sam sufit, z najwyższym prawdopodobieństwem w tej
+  grupie, osobno dla każdej księgi. Kill-switch celowo się nie liczy — jego odrzuceń
+  podniesienie limitu nie odblokuje. Ta liczba ma sens dopiero od 0.1.12, kiedy silnik
+  zaczął pytać model **przed** sprawdzeniem limitu.
+- Powód, dla którego to powstało, opisany w `howitworks.md` §4.8: 9.08 o 17:51 UTC
+  limit poszedł z 5 na 10 i wrócił o 22:43, ale świeca 20:00 zdążyła otworzyć cztery
+  pozycje i podnieść `prog_050` z 50% na 90% konta. Zostały po cofnięciu ustawienia,
+  trzy wyszły po bezpieczniku i **kosztowały 7,07 USDT — 51% całego obsunięcia**;
+  rynek w tym czasie dał −1,60%, a uczciwa poprzeczka przy tej ekspozycji −1,04% wobec
+  −1,30% księgi. Kontrola: `prog_065` i `ryzyko_100` nie dobrały wtedy ani jednej
+  pozycji i spadły −0,90% / −1,34% — tyle było rynkiem.
+- `journals.book_states` czyta `state.json` wszystkich ksiąg krypto; ekran ustawień
+  potrzebuje żywego stanu, a nie może importować `app.py` (to `app` importuje
+  `config_view`).
+- Poprawiona nieaktualna tabela w §4.7: trzy księgi progowe mają dziś sufit 5 × 10%,
+  nie 3 × 10%.
+
 ## 0.1.12 — 2026-08-10
 
 - **Ciemna linia na „Jak to szło" idzie teraz za ekspozycją bota świeca po świecy**

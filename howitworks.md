@@ -378,6 +378,10 @@ Osobno działa alarm obsunięcia: przy spadku o `drawdown_alert_pct` od szczytu 
 jedno powiadomienie, a próg odwieszenia jest o połowę niższy niż próg alarmu —
 histereza, żeby księga drgająca wokół granicy nie wysyłała alarmu co świecę.
 
+Oba te bezpieczniki pilnują dnia, w którym rynek jest zły. Nie pilnują dnia, w którym
+**ustawienia** są złe: podniesiony sufit ekspozycji nie jest stratą, dopóki pozycje nie
+zaczną spadać, więc nic go nie zatrzyma. Za to §4.8.
+
 ### 4.6 Rytm doby: co się dzieje między świecami
 
 Silnik nie stoi bezczynnie między decyzjami. Cztery pętle chodzą równolegle,
@@ -405,9 +409,9 @@ niezależne portfele**, które dostają dokładnie te same dane w tej samej chwi
 
 | Księga | Próg | Sizing | Sufit ekspozycji |
 |---|---|---|---|
-| `prog_050` (główna) | 0,50 | 3 × 10% | 30% |
-| `prog_055` | 0,55 | 3 × 10% | 30% |
-| `prog_065` | 0,65 | 3 × 10% | 30% |
+| `prog_050` (główna) | 0,50 | 5 × 10% | 50% |
+| `prog_055` | 0,55 | 5 × 10% | 50% |
+| `prog_065` | 0,65 | 5 × 10% | 50% |
 | `ryzyko_100` | 0,50 | 5 × 20% | **100%** |
 
 Trzy pierwsze różnią się wyłącznie progiem, więc różnica w ich krzywych kapitału jest
@@ -420,6 +424,50 @@ głównego, żeby ta księga nigdy nie trafiła na niego jako „Twój portfel".
 
 Każda księga ma własny katalog w `runtime/`, własną gotówkę i własny kill-switch.
 Wspólne mają: świece, model i egzekutora.
+
+### 4.8 Epizod 9–10.08.2026: ile kosztuje jedno kliknięcie w limit
+
+Sufit pozycji jest w tym projekcie **najsilniejszym zmierzonym efektem** (§7.1: limit 3
+bije limit 10 o +4,5 pp na okno, 8 okien z 10, t = +2,7 — jedyny wynik, który
+przekracza zwykłą poprzeczkę istotności). Ten epizod jest tego potwierdzeniem na żywo,
+zapisanym tutaj, bo pokazuje coś, czego backtest nie pokaże: **jak ta zmiana wchodzi
+w czasie**.
+
+Oś czasu księgi `prog_050` (wszystko UTC, z `runtime/config_history.jsonl` i dzienników):
+
+| Kiedy | Co | Ekspozycja |
+|---|---|---|
+| 09.08 12:00 | szczyt kapitału: 1019,95 USDT | 50% |
+| 09.08 17:51 | z panelu: `max_open_positions` 5 → 10 | 50% |
+| 09.08 20:00 | pierwsza świeca po zmianie: **cztery nowe pozycje** (ETH p=0,62, ADA 0,59, XRP 0,57, DOGE 0,58) | **90%** |
+| 09.08 22:43 | z panelu: `max_open_positions` 10 → 5 | 90% |
+| 10.08 04:00 → 16:00 | trzy z tych czterech wychodzą po bezpieczniku, czwarta wisi | 50% |
+| 10.08 17:39 | kapitał 1006,16 USDT | 50% |
+
+**Rozbicie spadku.** Od szczytu do końca doby 10.08:
+
+- koszyk równoważny handlowanych par: **−1,60%** (ETH −2,57%, LTC −2,60%, BTC −1,42%) —
+  to jest rynek i on dał kierunek;
+- uczciwa poprzeczka (`matched_exposure_curve`, §7): **−1,04%**, księga: **−1,30%**;
+- cztery pozycje otwarte na świecy 20:00: **−7,07 USDT**, czyli **51% całego
+  obsunięcia**. Bez nich księga skończyłaby na 1013,23 zamiast 1006,16, a obsunięcie
+  wyniosłoby −0,66% zamiast −1,35%.
+
+**Kontrola, która oddziela rynek od ustawień.** `prog_065` (za mało sygnałów, żeby
+skorzystać z wolnych miejsc) i `ryzyko_100` (nie miało gotówki na więcej) nie dobrały
+przy podniesionym limicie ani jednej pozycji — i spadły **−0,90%** i **−1,34%**.
+Tyle właśnie było rynkiem; reszta u `prog_050` i `prog_055` (tam analogiczne cztery
+pozycje kosztowały −6,59 USDT) była ekspozycją.
+
+**Wniosek, który poszedł do panelu.** Strata nie wzięła się z tego, że model przestał
+działać — bot przegrał z biernym trzymaniem tego samego rynku przy tej samej
+ekspozycji o 0,26 pp, resztę zrobił kierunek rynku pomnożony przez ekspozycję. Wzięła
+się z tego, że przez pięć godzin ekspozycja była prawie dwa razy większa, niż zwykle,
+i trafiła dokładnie w zjazd. Kliknięcie, które to zrobiło, nie mówiło ani ile par
+czeka w kolejce na nowe miejsca, ani — co ważniejsze — że **cofnięcie limitu niczego
+nie zamyka**: zmiana w górę wchodzi przy najbliższej świecy, zmiana w dół dopiero
+wtedy, gdy nadmiarowe pozycje same się zamkną. Od 0.1.13 ekran ustawień pokazuje jedno
+i drugie (§8.1).
 
 ---
 
@@ -641,6 +689,17 @@ po zapisie ani nie mylić `ryzyko_100` z awarią.
 
 Zmiana parametrów w locie robi z krzywej kapitału mieszankę dwóch strategii — i to jest
 powód istnienia dziennika z punktu 3. Panel rysuje szew, zamiast po cichu uśrednić.
+
+**Dwie zmiany ryzyka pytają, zanim wejdą.** Podniesienie sufitu ekspozycji
+(`position_pct × max_open_positions` — obojętne, którą połową) otwiera okno
+z potwierdzeniem, bo skutek przychodzi jedną świecą później i nie da się go cofnąć:
+pozycje otwarte przy wyższym limicie żyją do celu, bezpiecznika albo terminu, a samo
+przywrócenie niższej wartości nie zamyka żadnej. Sekcja „Ryzyko" pokazuje przy tym, ile
+par **czeka w kolejce** na zwolnione miejsce — liczone z `state.json` jako sygnały
+odrzucone przez sam sufit (kill-switch się nie liczy, bo jego podniesienie limitu nie
+odblokuje). Ta liczba ma sens dopiero od 0.1.12: wcześniej silnik sprawdzał limit
+**przed** zapytaniem modelu, więc odrzucona para nie miała przy sobie żadnego
+prawdopodobieństwa. Skąd to wszystko: §4.8.
 
 ---
 
