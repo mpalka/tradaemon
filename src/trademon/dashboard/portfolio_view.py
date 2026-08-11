@@ -153,8 +153,11 @@ def _render_beginner(pcfg: PortfolioConfig, state: dict, equity_df: pd.DataFrame
     targets = state.get("target_weights", pcfg.base_weights)
     active = {s: q for s, q in holdings.items() if q and last_close.get(s)}
 
-    def prices_for(sym: str) -> pd.DataFrame:
-        return price_view.portfolio_prices(pcfg.paths.data_dir, sym)
+    # Scoped to this render, as on the crypto screen: the holdings and the event
+    # journal below name the same few tickers, each of which needs a tooltip.
+    prices_for = price_view.memoized(
+        lambda sym: price_view.portfolio_prices(pcfg.paths.data_dir, sym))
+    tooltip = price_view.tooltips(prices_for)
 
     if not active:
         st.info("Jeszcze nic — bot czeka na pierwszą alokację.")
@@ -168,7 +171,7 @@ def _render_beginner(pcfg: PortfolioConfig, state: dict, equity_df: pd.DataFrame
             with cols[i % len(cols)]:
                 price_view.preview_button(f"**{card['emoji']} {card['title']}**", sym,
                                           "port_pos", key=f"port_pos_{sym}",
-                                          prices=prices_for(sym))
+                                          tooltip=tooltip(sym))
                 st.markdown(card["detail"])
         price_view.render("port_pos", prices_for, trades)
 
@@ -183,7 +186,7 @@ def _render_beginner(pcfg: PortfolioConfig, state: dict, equity_df: pd.DataFrame
                 key = f"port_ev_{n}_{sym}"
                 price_view.preview_button(f"{e['emoji']} `{e['time']}` {e['text']}", sym,
                                           "port_ev", key=key,
-                                          at=rec.get("timestamp"), prices=prices_for(sym))
+                                          at=rec.get("timestamp"), tooltip=tooltip(sym))
                 price_view.render("port_ev", prices_for, trades, item=key)
             else:
                 st.markdown(f"{e['emoji']} &nbsp;`{e['time']}` &nbsp; {e['text']}")

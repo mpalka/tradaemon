@@ -111,6 +111,68 @@ def test_summary_marks_unknown_changes_with_a_dash(prices):
     assert "7 dni —" in pv.summary(prices.tail(2))
 
 
+def test_pct_change_accepts_a_prepared_timestamp_column(prices):
+    """`summary` parses once and passes the column to both horizons; the answer must
+    not depend on who did the parsing."""
+    ts = pd.to_datetime(prices["timestamp"], utc=True)
+    assert pv.pct_change(prices, 24, ts=ts) == pv.pct_change(prices, 24)
+    assert pv.pct_change(prices, 24 * 7, ts=ts) == pv.pct_change(prices, 24 * 7)
+
+
+def test_summary_ignores_history_older_than_its_lookback():
+    """The tooltip runs on a tail slice to keep `pd.to_datetime` off years of stored
+    candles. On a history longer than that tail it must still read the same numbers
+    the full frame gives — the slice bounds the lookback, not the answer."""
+    ts = pd.date_range(end="2026-08-05", periods=pv.SUMMARY_TAIL * 3, freq="D", tz="UTC")
+    long = pd.DataFrame({"timestamp": ts,
+                         "close": [100.0 + i for i in range(len(ts))]})
+    assert len(long) > pv.SUMMARY_TAIL
+
+    text = pv.summary(long)
+    for hours in (24, 24 * 7):
+        # the reference: the same question asked of every row there is
+        expected = pv.pct_change(long, hours)
+        assert f"{expected:+.1f}%" in text
+
+
+def test_summary_survives_a_history_shorter_than_the_tail(prices):
+    """A young pair has fewer rows than the slice asks for; tail() must not invent any."""
+    assert pv.summary(prices.tail(3)).startswith("teraz")
+
+
+# ---------- per-render caches ----------
+
+def test_tooltips_builds_one_summary_per_instrument():
+    """The event journal repeats a handful of pairs across sixty rows. Sixty lookups
+    of eleven instruments must cost eleven derivations, not sixty."""
+    calls = []
+
+    def prices_for(symbol):
+        calls.append(symbol)
+        return pd.DataFrame({"timestamp": pd.date_range("2026-08-01", periods=10,
+                                                        freq="4h", tz="UTC"),
+                             "close": [100.0] * 10})
+
+    tooltip = pv.tooltips(prices_for)
+    rows = ["BTC/USDT", "ETH/USDT", "BTC/USDT", "LTC/USDT", "BTC/USDT", "ETH/USDT"]
+    texts = [tooltip(sym) for sym in rows]
+
+    assert calls == ["BTC/USDT", "ETH/USDT", "LTC/USDT"]
+    assert texts[0] == texts[2] == texts[4]   # same pair, same sentence
+
+
+def test_memoized_reads_each_instrument_once():
+    calls = []
+
+    def prices_for(symbol):
+        calls.append(symbol)
+        return pd.DataFrame({"timestamp": [], "close": []})
+
+    cached = pv.memoized(prices_for)
+    cached("SPY"), cached("TLT"), cached("SPY"), cached("SPY")
+    assert calls == ["SPY", "TLT"]
+
+
 # ---------- trade marks ----------
 
 def test_trade_points_splits_a_crypto_round_trip_into_two_marks():

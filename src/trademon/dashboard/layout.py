@@ -85,9 +85,21 @@ def chart_height(desktop: int = 300) -> int:
 
 
 def refresh_interval() -> str:
-    """A 4h candle closes six times a day — polling every 15s on a phone spends data
-    and battery to redraw the same numbers."""
-    return "60s" if is_mobile() else "15s"
+    """How often the live screens redraw — the same on both layouts.
+
+    Sixty seconds is not a compromise, it is the ceiling on how fast anything here
+    can change. Decisions land on closed 4h candles, and between them the engine's
+    ticker loop is the only writer of the equity and last_close the panel reads —
+    at `TICKER_SECONDS = 60` (`engine/loop.py`). Redrawing at 15s therefore
+    rendered identical numbers three times out of four.
+
+    That used to be free enough to ignore; it was not. Each redraw walks the whole
+    beginner screen, and on the NAS's Celeron the wasted three-quarters was most of
+    why the panel felt sluggish. The phone-only interval this replaces was the
+    right instinct applied to one device — battery and data — when the argument
+    was never really about the device.
+    """
+    return "60s"
 
 
 def max_cards() -> int:

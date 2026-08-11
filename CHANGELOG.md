@@ -3,6 +3,34 @@
 Najnowsze na górze. Numer wersji z tego pliku musi zgadzać się z `__version__`
 w `src/trademon/__init__.py` — pilnuje tego `tests/test_version.py`.
 
+## 0.1.14 — 2026-08-11
+
+- **Panel przestał liczyć sześćdziesiąt razy to samo.** Dziennik zdarzeń rysuje do
+  sześćdziesięciu wierszy, każdy z dymkiem pokazującym kurs, a `prices=prices_for(sym)`
+  było **argumentem** `preview_button` — więc liczyło się zachłannie dla każdego
+  wiersza, mimo że te sześćdziesiąt wierszy wymienia zaledwie **11 różnych par**.
+  Zmierzone na żywych księgach z NAS-a: **1267 ms pandas na jedno odświeżenie**,
+  powtarzane co 15 s przez fragment `run_every`. Teraz `price_view.tooltips()` liczy
+  dymek raz na instrument, a `price_view.memoized()` raz czyta jego notowania —
+  **95 ms, czyli 13,4× szybciej** (na NAS-ie szacunkowo ~3,5 s → ~0,26 s).
+- **`summary()` przestało parsować całą historię, żeby odczytać trzy liczby z ogona.**
+  `pct_change` wołało `pd.to_datetime` na ~12 000 wierszy z Parquetu, i to dwa razy
+  (raz na horyzont 24 h / 7 dni). Teraz kolumna parsuje się raz, na ogonie 200 świec —
+  33 dni na 4h i 200 dni na notowaniach dziennych, więc horyzont 7 dni mieści się
+  z zapasem w obu modułach. Wycinek ogranicza *zasięg spojrzenia wstecz*, nie odpowiedź:
+  test porównuje wynik z tym samym pytaniem zadanym pełnej ramce.
+- To sama warstwa prezentacji — **żadnej zmiany w logice bota, decyzjach ani księgach**.
+  Dymki są identyczne co do znaku; sprawdzone przez porównanie 60 wierszy przed i po.
+- Ten sam wzorzec naprawiony w module portfela (`portfolio_view.py`), gdzie był
+  łagodniejszy (15 wierszy dziennika zamiast 60).
+- **Panel odświeża się co 60 s zamiast co 15 s** — na obu układach, nie tylko na
+  telefonie. To nie jest kompromis, tylko sufit: decyzje zapadają na zamkniętych
+  świecach 4h, a pomiędzy nimi jedynym pisarzem `equity`/`last_close` jest pętla
+  tickera silnika, chodząca co `TICKER_SECONDS = 60`. Odświeżanie co 15 s
+  przerysowywało te same liczby trzy razy na cztery. Razem z poprawkami wyżej
+  panel zużywa na NAS-ie **ok. 54× mniej czasu procesora** (~3,5 s co 15 s, czyli
+  23% rdzenia bez przerwy → ~0,26 s co 60 s, czyli 0,4%).
+
 ## 0.1.13 — 2026-08-10
 
 - **Podniesienie sufitu ekspozycji pyta, zanim wejdzie.** Okno z potwierdzeniem łapie

@@ -81,11 +81,18 @@ def window(df: pd.DataFrame, days: int, at: str | None = None) -> pd.DataFrame:
     return df[ts >= start].reset_index(drop=True)
 
 
-def pct_change(df: pd.DataFrame, hours: float) -> float | None:
-    """Percent move over the last `hours`, or None when the history is too short."""
+def pct_change(df: pd.DataFrame, hours: float, ts: pd.Series | None = None) -> float | None:
+    """Percent move over the last `hours`, or None when the history is too short.
+
+    `ts` is the already-parsed timestamp column. Parsing it is the expensive part —
+    `pd.to_datetime` costs ~5 ms on a full 4h history even when the column is
+    already datetime64 — and `summary` asks for two horizons off the same frame,
+    so it parses once and passes the result in rather than paying twice.
+    """
     if len(df) < 2:
         return None
-    ts = pd.to_datetime(df["timestamp"], utc=True)
+    if ts is None:
+        ts = pd.to_datetime(df["timestamp"], utc=True)
     past = df[ts <= ts.max() - pd.Timedelta(hours=hours)]
     if past.empty:
         return None
@@ -93,15 +100,74 @@ def pct_change(df: pd.DataFrame, hours: float) -> float | None:
     return (last / first - 1.0) * 100.0 if first else None
 
 
+# The tooltip looks back seven days. On 4h candles that is 42 rows, on the portfolio
+# manager's daily bars 7 — so a 200-row tail covers both with room to spare, while
+# keeping `pd.to_datetime` off the ~12k rows of stored history behind it. The number
+# is a bound on the *lookback*, not on the data: a longer history is not truncated
+# anywhere else, only ignored for this one calculation.
+SUMMARY_TAIL = 200
+
+
 def summary(df: pd.DataFrame) -> str:
-    """The hover tooltip: what the price is doing, in one line."""
+    """The hover tooltip: what the price is doing, in one line.
+
+    Runs on a tail slice rather than the whole frame. The event journal renders up
+    to sixty rows per refresh and every one of them carries a tooltip, so this is
+    the panel's hottest path by a wide margin — see `tooltips()` for the other half
+    of that story.
+    """
     if df is None or df.empty:
         return "Brak zapisanych notowań tego instrumentu."
-    parts = [f"teraz {humanize.money2(float(df['close'].iloc[-1]))}"]
+    tail = df.tail(SUMMARY_TAIL)
+    ts = pd.to_datetime(tail["timestamp"], utc=True)
+    parts = [f"teraz {humanize.money2(float(tail['close'].iloc[-1]))}"]
     for label, hours in (("24 h", 24), ("7 dni", 24 * 7)):
-        change = pct_change(df, hours)
+        change = pct_change(tail, hours, ts=ts)
         parts.append(f"{label} {change:+.1f}%" if change is not None else f"{label} —")
     return " · ".join(parts) + "  \nKliknij, aby zobaczyć wykres kursu."
+
+
+def tooltips(prices_for: Callable[[str], pd.DataFrame]) -> Callable[[str], str]:
+    """One tooltip per instrument for the whole render, not one per row.
+
+    The event journal repeats the same handful of pairs across its sixty rows — a
+    live book shows eleven distinct instruments in those sixty lines — and each row
+    used to rebuild the pair's price frame and re-derive its tooltip from scratch.
+    Measured on the NAS's own books that came to ~1.1 s of pandas per refresh, every
+    15 s, to produce eleven distinct strings.
+
+    Returns a closure rather than caching in `st.cache_data`: the frame it would key
+    on is the equity journal extended with a live point that moves every 60 s, so a
+    cross-run cache would miss about as often as it hits. Within one render the
+    prices cannot change, which is exactly the scope a plain dict covers.
+    """
+    cache: dict[str, str] = {}
+
+    def get(symbol: str) -> str:
+        if symbol not in cache:
+            cache[symbol] = summary(prices_for(symbol))
+        return cache[symbol]
+
+    return get
+
+
+def memoized(prices_for: Callable[[str], pd.DataFrame]) -> Callable[[str], pd.DataFrame]:
+    """`prices_for` that reads each instrument once per render.
+
+    Both beginner screens ask for the same pair from several places — the position
+    cards, the event rows, and `render()` for whichever row is open. The underlying
+    Parquet read is already cached by `closes()`; what this saves is the per-call
+    work on top of it (the journal tail merge, a concat and a sort over the full
+    history).
+    """
+    cache: dict[str, pd.DataFrame] = {}
+
+    def get(symbol: str) -> pd.DataFrame:
+        if symbol not in cache:
+            cache[symbol] = prices_for(symbol)
+        return cache[symbol]
+
+    return get
 
 
 def trade_points(trades: pd.DataFrame | None, symbol: str,
@@ -272,15 +338,20 @@ def styles() -> None:
 
 
 def preview_button(label: str, symbol: str, section: str, key: str,
-                   at: str | None = None, prices: pd.DataFrame | None = None) -> None:
+                   at: str | None = None, tooltip: str | None = None) -> None:
     """One clickable instrument: hover for the numbers, click for the chart.
 
     Tertiary buttons render as plain text, so a fifteen-row event log stays a
     timeline instead of turning into a wall of grey boxes. `key` doubles as the
     row's identity, so `render(..., item=key)` can put the chart under this row.
+
+    `tooltip` arrives already built (callers pass `tooltips(...)(symbol)`) rather
+    than as the price frame this used to derive it from. Same string either way,
+    but a `prices=` parameter is evaluated per row at the call site, which made
+    sixty rows mean sixty derivations of eleven distinct tooltips.
     """
     if st.button(label, key=f"pv_{key}",   # the prefix `styles()` hangs its CSS on
-                 help=summary(prices), type="tertiary", width="stretch"):
+                 help=tooltip, type="tertiary", width="stretch"):
         st.session_state[_KEY] = next_selection(st.session_state.get(_KEY), symbol,
                                                 section, at, item=key)
 

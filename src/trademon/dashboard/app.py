@@ -379,8 +379,10 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
     positions = state.get("positions", {})
     last_close = state.get("last_close", {})
 
-    def prices_for(sym: str) -> pd.DataFrame:
-        return price_view.crypto_prices(sym, equity_df)
+    # Both wrappers scope a cache to this one render: the event journal below asks
+    # for the same eleven-ish pairs across sixty rows, and every row needs a tooltip.
+    prices_for = price_view.memoized(lambda sym: price_view.crypto_prices(sym, equity_df))
+    tooltip = price_view.tooltips(prices_for)
 
     if not positions:
         st.info("Nic — bot czeka na okazję. 🕊️")
@@ -392,7 +394,7 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
             with cols[i % len(cols)]:
                 price_view.preview_button(f"**{card['emoji']} {card['title']}**", sym,
                                           "crypto_pos", key=f"pos_{sym}",
-                                          prices=prices_for(sym))
+                                          tooltip=tooltip(sym))
                 tone = "green" if card["pnl"] > 0 else ("red" if card["pnl"] < 0 else "gray")
                 st.markdown(f":{tone}[{card['detail']}]")
         price_view.render("crypto_pos", prices_for, trades, positions)
@@ -416,7 +418,7 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
                 key = f"ev_{n}_{sym}"
                 price_view.preview_button(f"{e['emoji']} `{e['time']}` {e['text']}", sym,
                                           "crypto_ev", key=key,
-                                          at=rec.get("timestamp"), prices=prices_for(sym))
+                                          at=rec.get("timestamp"), tooltip=tooltip(sym))
                 # inside the loop: the chart belongs under the clicked line, not
                 # under fifteen rows of other events where nobody looks for it
                 price_view.render("crypto_ev", prices_for, trades, positions, item=key)
