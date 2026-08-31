@@ -18,12 +18,13 @@ Newest first. The version at the top of this file must match `__version__` in
   capitalised mark.
 - Older changelog entries were rewritten to the new module path too. A history that cites
   paths which no longer exist is not more honest, only less useful.
-- **If you already run this on a NAS, it is a migration, not a redeploy.** The compose
-  project name comes from the directory, so `/volume1/docker/trademon` becomes
-  `/volume1/docker/tradaemon`, containers become `tradaemon-bot-1`, and the Docker network
-  becomes `tradaemon_default` — which matters if your DSM firewall rule was pinned to the
-  old subnet. Move the directory before the rebuild and `runtime/` comes with it, so no
-  book loses its history.
+- **An existing deployment needs no directory rename.** The parent directory's name is
+  cosmetic — the package renames inside it, and `docker-compose.yml` and the `Dockerfile`
+  already point at the new paths. Sending the source into the directory you already have
+  and rebuilding is the whole update. Renaming it is optional and not free: the compose
+  project name comes from the directory, so `/volume1/docker/tradaemon` would give you
+  `tradaemon-bot-1` and a new `tradaemon_default` network — which matters if a DSM
+  firewall rule is pinned to the old subnet. On a live book, leave it.
 
 ## 0.2.0 — 2026-08-31
 

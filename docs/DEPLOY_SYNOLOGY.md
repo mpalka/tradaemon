@@ -124,7 +124,7 @@ channel as the data.
 From your machine, in the project directory:
 
 ```bash
-COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/tradaemon'
+COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example LICENSE DISCLAIMER.md README.md README.pl.md howitworks.md howitworks.pl.md CHANGELOG.md CHANGELOG.pl.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/tradaemon'
 ```
 
 The list is explicit on purpose: the whole source is ~1 MB, but the `.venv` next to it is
@@ -337,7 +337,7 @@ only a leftover from experimenting at home, delete it before sending.
 **2. Send the source.** From your machine, after a `git pull`:
 
 ```bash
-COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/tradaemon'
+COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example LICENSE DISCLAIMER.md README.md README.pl.md howitworks.md howitworks.pl.md CHANGELOG.md CHANGELOG.pl.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/tradaemon'
 ```
 
 **3. Rebuild the image.** Container Manager → *Project* → `tradaemon` → **Stop** →

@@ -128,7 +128,7 @@ dane.
 Ze stacji roboczej, z katalogu projektu:
 
 ```bash
-COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/tradaemon'
+COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example LICENSE DISCLAIMER.md README.md README.pl.md howitworks.md howitworks.pl.md CHANGELOG.md CHANGELOG.pl.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/tradaemon'
 ```
 
 Lista jest jawna z rozmysłem: całe źródło waży ~1 MB, ale `.venv` obok niego kilkaset.
@@ -348,7 +348,7 @@ wysyłką.
 **2. Wyślij źródło.** Ze stacji roboczej, po `git pull` u siebie:
 
 ```bash
-COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/tradaemon'
+COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example LICENSE DISCLAIMER.md README.md README.pl.md howitworks.md howitworks.pl.md CHANGELOG.md CHANGELOG.pl.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/tradaemon'
 ```
 
 **3. Przebuduj obraz.** Container Manager → *Projekt* → `tradaemon` →

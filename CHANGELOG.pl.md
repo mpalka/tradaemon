@@ -18,12 +18,13 @@ pilnuje obu rzeczy `tests/test_version.py`.
   identyfikator małymi literami, znak firmowy z wielkimi.
 - Starsze wpisy w historii zmian też przepisano na nową ścieżkę modułu. Historia cytująca
   ścieżki, które już nie istnieją, nie jest uczciwsza — jest tylko mniej użyteczna.
-- **Jeśli już uruchamiasz to na NAS-ie, to migracja, a nie zwykłe wdrożenie.** Nazwa
-  projektu w Compose bierze się z katalogu, więc `/volume1/docker/trademon` staje się
-  `/volume1/docker/tradaemon`, kontenery nazywają się `tradaemon-bot-1`, a sieć Dockera
-  `tradaemon_default` — co ma znaczenie, jeśli reguła zapory DSM była przypięta do starej
-  podsieci. Przenieś katalog przed przebudową, a `runtime/` pojedzie razem z nim i żadna
-  księga nie straci historii.
+- **Istniejące wdrożenie nie wymaga zmiany nazwy katalogu.** Nazwa katalogu nadrzędnego
+  jest kosmetyczna — pakiet zmienia nazwę w środku, a `docker-compose.yml` i `Dockerfile`
+  już wskazują nowe ścieżki. Wysłanie źródła do katalogu, który już masz, i przebudowa to
+  cała aktualizacja. Zmiana nazwy jest opcjonalna i nie jest darmowa: nazwa projektu
+  w Compose bierze się z katalogu, więc `/volume1/docker/tradaemon` dałoby
+  `tradaemon-bot-1` i nową sieć `tradaemon_default` — co ma znaczenie, jeśli reguła zapory
+  DSM jest przypięta do starej podsieci. Na żywej księdze zostaw jak jest.
 
 ## 0.2.0 — 2026-08-31
 
