@@ -10,7 +10,7 @@ import json
 
 import pandas as pd
 
-from trademon.dashboard import journals
+from tradaemon.dashboard import journals
 
 
 def write_rows(path, rows):

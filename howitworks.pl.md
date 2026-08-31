@@ -820,7 +820,7 @@ Gniazda Dockera nie ma i mieć nie powinien.
 ## 11. Mapa katalogów
 
 ```
-src/trademon/
+src/tradaemon/
   config.py, config_store.py   konfiguracja: model pydantic + bezpieczny zapis z panelu
   i18n.py, locales/            w jakim języku czyta odbiorca; jeden słownik na język
   data/        ingestion.py    pobieranie przez CCXT (przyrostowe)

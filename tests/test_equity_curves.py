@@ -37,7 +37,7 @@ def _book(bars: list[tuple[float, float]], equity: float = 1000.0) -> pd.DataFra
 
 
 def _ends(df: pd.DataFrame) -> tuple:
-    from trademon.dashboard.app import (
+    from tradaemon.dashboard.app import (
         book_equity_series,
         buy_hold_curve,
         matched_exposure_curve,
@@ -49,7 +49,7 @@ def _ends(df: pd.DataFrame) -> tuple:
 
 
 def test_a_state_with_prices_extends_every_line():
-    from trademon.dashboard.app import with_live_point
+    from tradaemon.dashboard.app import with_live_point
 
     df = _journal("2026-01-01T00:00:00+00:00", "2026-01-01T04:00:00+00:00")
     out = with_live_point(df, {
@@ -65,7 +65,7 @@ def test_a_state_with_prices_extends_every_line():
 def test_a_state_without_prices_adds_no_point():
     """The reported bug: a crashed engine persists a fresh `updated_at` with an
     empty `last_close`, and the bot's line used to run on past both benchmarks."""
-    from trademon.dashboard.app import with_live_point
+    from tradaemon.dashboard.app import with_live_point
 
     df = _journal("2026-01-01T00:00:00+00:00", "2026-01-01T04:00:00+00:00")
     out = with_live_point(df, {
@@ -81,7 +81,7 @@ def test_a_state_without_prices_adds_no_point():
 def test_partial_prices_still_extend_every_line():
     """A pair missing from `last_close` is carried by `buy_hold_curve`'s ffill, so
     covering some pairs is enough — only covering none is not."""
-    from trademon.dashboard.app import with_live_point
+    from tradaemon.dashboard.app import with_live_point
 
     df = _journal("2026-01-01T00:00:00+00:00", "2026-01-01T04:00:00+00:00")
     out = with_live_point(df, {
@@ -94,7 +94,7 @@ def test_partial_prices_still_extend_every_line():
 
 
 def test_a_stale_state_does_not_move_the_curves_backwards():
-    from trademon.dashboard.app import with_live_point
+    from tradaemon.dashboard.app import with_live_point
 
     df = _journal("2026-01-01T00:00:00+00:00", "2026-01-01T04:00:00+00:00")
     out = with_live_point(df, {
@@ -107,7 +107,7 @@ def test_a_stale_state_does_not_move_the_curves_backwards():
 def test_the_fair_line_follows_the_exposure_of_each_bar():
     """Raising the risk mid-flight must show up in the benchmark straight away, not
     diluted into an average of the weeks that came before it."""
-    from trademon.dashboard.app import matched_exposure_curve
+    from tradaemon.dashboard.app import matched_exposure_curve
 
     # +10% a bar throughout; the book sits out the first move, then rides half of
     # the second and all of the third.
@@ -120,7 +120,7 @@ def test_a_bar_entered_flat_cannot_move_the_fair_line():
     """The journal stamps cash at candle close, so the exposure on bar *t* already
     knows how bar *t* went. Reading it unlagged would let the benchmark buy the move
     it is being measured on."""
-    from trademon.dashboard.app import matched_exposure_curve
+    from tradaemon.dashboard.app import matched_exposure_curve
 
     # flat going in, fully invested on the way out, and a +50% bar in between
     curve = matched_exposure_curve(_book([(100.0, 0.0), (150.0, 1.0)]), 1000.0)
@@ -131,7 +131,7 @@ def test_the_fair_line_has_the_same_shape_in_every_window():
     """The reason this line is compounded per bar instead of scaled by one average:
     an average is a property of the window, so „7 dni" and „30 dni" used to draw two
     different benchmarks and the comparison flipped between them."""
-    from trademon.dashboard.app import matched_exposure_curve
+    from tradaemon.dashboard.app import matched_exposure_curve
 
     bars = [(100.0, 0.3), (104.0, 0.3), (99.0, 0.9), (108.0, 0.9), (112.0, 0.9)]
     full = matched_exposure_curve(_book(bars), 1000.0).set_index("timestamp")["equity"]

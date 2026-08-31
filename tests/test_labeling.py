@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from trademon.labeling.triple_barrier import triple_barrier_labels
+from tradaemon.labeling.triple_barrier import triple_barrier_labels
 
 
 def make_flat_df(n: int, price: float = 100.0) -> pd.DataFrame:

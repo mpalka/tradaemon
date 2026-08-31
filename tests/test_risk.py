@@ -2,8 +2,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from trademon.config import RiskConfig
-from trademon.risk.manager import RiskManager
+from tradaemon.config import RiskConfig
+from tradaemon.risk.manager import RiskManager
 
 NOW = datetime(2026, 7, 1, 12, 0, tzinfo=UTC)
 

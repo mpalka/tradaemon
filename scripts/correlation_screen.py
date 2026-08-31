@@ -15,12 +15,12 @@ import logging
 
 import pandas as pd
 
-from trademon import i18n
-from trademon.i18n import t
-from trademon.portfolio.config import load_portfolio_config
-from trademon.portfolio.correlation import screen, summarize_screen, verdict_help
-from trademon.portfolio.data import download_etf, load_wide_panel
-from trademon.research.log import log_experiment
+from tradaemon import i18n
+from tradaemon.i18n import t
+from tradaemon.portfolio.config import load_portfolio_config
+from tradaemon.portfolio.correlation import screen, summarize_screen, verdict_help
+from tradaemon.portfolio.data import download_etf, load_wide_panel
+from tradaemon.research.log import log_experiment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("screen")

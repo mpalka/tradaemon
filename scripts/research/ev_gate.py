@@ -25,9 +25,9 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from trademon.config import load_config
-from trademon.features.engineering import FEATURE_COLUMNS, compute_features
-from trademon.research.lab import (
+from tradaemon.config import load_config
+from tradaemon.features.engineering import FEATURE_COLUMNS, compute_features
+from tradaemon.research.lab import (
     Window,
     buy_hold_pct,
     enough_history,
@@ -40,7 +40,7 @@ from trademon.research.lab import (
     with_costs,
     with_strategy,
 )
-from trademon.research.structure import barrier_labels, prepare, run_structure_backtest
+from tradaemon.research.structure import barrier_labels, prepare, run_structure_backtest
 
 warnings.filterwarnings("ignore", message="X does not have valid feature names")
 logging.basicConfig(level=logging.WARNING)

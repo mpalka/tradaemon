@@ -12,7 +12,7 @@ Podstaw własne.
 
 - **DSM 7.2+** z pakietem **Container Manager** (Centrum Pakietów).
 - **SSH włączone**: Panel sterowania → Terminal i SNMP → Włącz usługę SSH.
-- Folder współdzielony na projekt, docelowo `/volume1/docker/trademon` — patrz niżej.
+- Folder współdzielony na projekt, docelowo `/volume1/docker/tradaemon` — patrz niżej.
 
 ### Skąd się bierze `/volume1/docker`
 
@@ -40,7 +40,7 @@ ls -ld /volume1/docker
   katalogiem i księgi zaczęłyby od zera;
 - kosz i migawki wedle uznania, nie mają wpływu na działanie.
 
-Podkatalog `trademon` utworzy się sam przy pierwszym kopiowaniu (krok 2) —
+Podkatalog `tradaemon` utworzy się sam przy pierwszym kopiowaniu (krok 2) —
 nie musisz go klikać.
 
 ### Poza tym nie zakładasz żadnych katalogów ręcznie
@@ -49,10 +49,10 @@ nie musisz go klikać.
 
 | Katalog | Skąd się bierze |
 |---|---|
-| `trademon/` | `mkdir -p` w komendzie z kroku 2 |
+| `tradaemon/` | `mkdir -p` w komendzie z kroku 2 |
 | `config/`, `src/`, `scripts/` | wysyłka źródła z kroku 3 |
-| `data/`, `models/`, `runtime/` | kopiowanie z kroku 2; a gdyby ich nie było, tworzy je sam kod ([config.py](../src/trademon/config.py)) przy starcie |
-| `runtime/<nazwa-księgi>/` | `RuntimeStore` przy pierwszym zapisie ([engine/state.py](../src/trademon/engine/state.py)) |
+| `data/`, `models/`, `runtime/` | kopiowanie z kroku 2; a gdyby ich nie było, tworzy je sam kod ([config.py](../src/tradaemon/config.py)) przy starcie |
+| `runtime/<nazwa-księgi>/` | `RuntimeStore` przy pierwszym zapisie ([engine/state.py](../src/tradaemon/engine/state.py)) |
 
 **Właśnie dlatego kolejność ma znaczenie.** Jeśli odpalisz kontenery przed
 skopiowaniem danych, katalogi powstaną — ale **puste**, a księgi zaczną liczyć
@@ -93,7 +93,7 @@ dodać wpis w `~/.ssh/config` (`Host`, `User`, `IdentityFile`).
 Sam transfer — ze stacji roboczej, z katalogu projektu:
 
 ```bash
-tar czf - data models runtime config | ssh <nas> 'mkdir -p /volume1/docker/trademon && tar xzf - -C /volume1/docker/trademon'
+tar czf - data models runtime config | ssh <nas> 'mkdir -p /volume1/docker/tradaemon && tar xzf - -C /volume1/docker/tradaemon'
 ```
 
 > **Nie licz na rsync.** Na części instalacji DSM `rsync -avz ... <nas>:/volume1/...`
@@ -128,7 +128,7 @@ dane.
 Ze stacji roboczej, z katalogu projektu:
 
 ```bash
-COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/trademon'
+COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/tradaemon'
 ```
 
 Lista jest jawna z rozmysłem: całe źródło waży ~1 MB, ale `.venv` obok niego kilkaset.
@@ -147,7 +147,7 @@ wygody.
 Na koniec utwórz `.env` — musi istnieć, nawet pusty:
 
 ```bash
-ssh <nas> 'cd /volume1/docker/trademon && cp -n .env.example .env'
+ssh <nas> 'cd /volume1/docker/tradaemon && cp -n .env.example .env'
 ```
 
 Dlaczego wymagany: Container Manager ma starszą Compose, która nie zna
@@ -194,7 +194,7 @@ kontenera (to wymaga `sudo`, patrz krok 5); zajrzyj do plików, które silnik
 zapisuje na dysku NAS-a:
 
 ```bash
-ssh <nas> 'python3 -c "import json;s=json.load(open(\"/volume1/docker/trademon/runtime/prog_050/state.json\"));print(s[\"updated_at\"], len(s[\"last_close\"]), \"par\")"'
+ssh <nas> 'python3 -c "import json;s=json.load(open(\"/volume1/docker/tradaemon/runtime/prog_050/state.json\"));print(s[\"updated_at\"], len(s[\"last_close\"]), \"par\")"'
 ```
 
 Ma pokazać świeży czas i **18 par** (tyle liczy `exchange.symbols` od 0.1.11;
@@ -204,7 +204,7 @@ działa i nie ma sensu szukać przyczyny w kodzie bota. Drugi sygnał: `ls -l` n
 `runtime/prog_050/equity.jsonl` — jeśli `state.json` jest sprzed sekund, a
 `equity.jsonl` sprzed godzin, to trwa pętla restartów.
 
-Podgląd logów kontenera masz w Container Manager → *Kontener* → `trademon-bot-1`
+Podgląd logów kontenera masz w Container Manager → *Kontener* → `tradaemon-bot-1`
 → *Dziennik*.
 
 ### Gdy bot nie dosięga giełdy — zmierz z wnętrza kontenera
@@ -216,7 +216,7 @@ zmieniania resolwerów, gdy przyczyna była zupełnie gdzie indziej.
 
 **Nie wnioskuj z hosta ani z plików stanu** — kontener ma własną przestrzeń
 sieciową, więc działający `nslookup` na DSM nie mówi o niej nic. Wejdź do
-środka: Container Manager → *Kontener* → `trademon-bot-1` → *Terminal* (bez ssh,
+środka: Container Manager → *Kontener* → `tradaemon-bot-1` → *Terminal* (bez ssh,
 bez roota) i wklej to. Obraz to `python:3.12-slim`, więc bez `dig`, `ping`
 i `curl` — Python załatwia sprawę:
 
@@ -324,7 +324,7 @@ stacji roboczej. Dwie opcje:
 - Zostaw jak jest — i tak działa w tle, raz na 7 dni, nie blokuje dashboardu.
 - Wyłącz na NAS-ie (`docker compose stop refresher` albo zakomentuj serwis w
   `docker-compose.yml`) i dalej trenuj lokalnie lokalnie, wysyłając potem samo
-  `models/` (`tar czf - models | ssh <nas> 'tar xzf - -C /volume1/docker/trademon'`).
+  `models/` (`tar czf - models | ssh <nas> 'tar xzf - -C /volume1/docker/tradaemon'`).
 
 ## 8. Aktualizacja aplikacji później
 
@@ -348,10 +348,10 @@ wysyłką.
 **2. Wyślij źródło.** Ze stacji roboczej, po `git pull` u siebie:
 
 ```bash
-COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/trademon'
+COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/tradaemon'
 ```
 
-**3. Przebuduj obraz.** Container Manager → *Projekt* → `trademon` →
+**3. Przebuduj obraz.** Container Manager → *Projekt* → `tradaemon` →
 **Zatrzymaj** → *Akcja* → **Kompiluj** → *Uruchom*. Zatrzymanie jest wymagane:
 na działającym projekcie GUI nie pozwoli przebudować obrazu. Samo *Uruchom* bez
 *Kompiluj* podniesie stary obraz i nic się nie zmieni.
@@ -366,7 +366,7 @@ kontener i potrafi przy niedokończonym wdrożeniu chodzić dalej na starym
 obrazie — z zewnątrz wygląda to na udaną aktualizację. Silnik pytaj osobno:
 
 ```bash
-ssh <nas> 'python3 -c "import json;s=json.load(open(\"/volume1/docker/trademon/runtime/prog_050/state.json\"));print(s[\"updated_at\"]);print(s.get(\"live_config\",\"BRAK — silnik nadal stary\"))"'
+ssh <nas> 'python3 -c "import json;s=json.load(open(\"/volume1/docker/tradaemon/runtime/prog_050/state.json\"));print(s[\"updated_at\"]);print(s.get(\"live_config\",\"BRAK — silnik nadal stary\"))"'
 ```
 
 Świeży `updated_at` **i** obecny `live_config` (klucz istnieje od 0.1.7) znaczą,
@@ -382,6 +382,6 @@ lokalnej kopii — dlatego krok 1 każe sprawdzić to przed wysyłką, a nie po.
 ## 9. Backup
 
 `runtime/` to jedyny katalog z realną, nieodtwarzalną historią (transakcje,
-equity). Warto objąć `/volume1/docker/trademon` istniejącym mechanizmem
+equity). Warto objąć `/volume1/docker/tradaemon` istniejącym mechanizmem
 Synology — Hyper Backup albo migawki wolumenu — zamiast liczyć wyłącznie na
 to, że dysk NAS-a nigdy nie padnie.

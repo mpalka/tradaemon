@@ -834,7 +834,7 @@ the restart flag (§8). There is no Docker socket, and there should not be one.
 ## 11. A map of the directories
 
 ```
-src/trademon/
+src/tradaemon/
   config.py, config_store.py   configuration: a pydantic model + safe writes from the panel
   i18n.py, locales/            which language the reader gets; one dict per language
   data/        ingestion.py    downloading through CCXT (incremental)

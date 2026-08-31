@@ -12,11 +12,11 @@ import logging
 
 import pandas as pd
 
-from trademon.config import load_config
-from trademon.data import storage
-from trademon.features.engineering import compute_atr, compute_features
-from trademon.labeling.triple_barrier import triple_barrier_labels
-from trademon.models.train import train_walk_forward
+from tradaemon.config import load_config
+from tradaemon.data import storage
+from tradaemon.features.engineering import compute_atr, compute_features
+from tradaemon.labeling.triple_barrier import triple_barrier_labels
+from tradaemon.models.train import train_walk_forward
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("train")

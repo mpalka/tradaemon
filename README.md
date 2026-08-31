@@ -100,8 +100,8 @@ The commands differ only in how the virtual environment is activated.
 <summary><b>macOS / Linux</b></summary>
 
 ```bash
-git clone https://github.com/<your-account>/trademon.git
-cd trademon
+git clone https://github.com/mpalka/tradaemon.git
+cd tradaemon
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -113,8 +113,8 @@ cp .env.example .env          # may stay empty; paper mode needs no keys
 <summary><b>Windows (PowerShell)</b></summary>
 
 ```powershell
-git clone https://github.com/<your-account>/trademon.git
-cd trademon
+git clone https://github.com/mpalka/tradaemon.git
+cd tradaemon
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
@@ -173,7 +173,7 @@ Expect an edge near zero — that is the honest result, not a broken installatio
 ### 6. Run the bot on simulated money
 
 ```bash
-python -m trademon.engine
+python -m tradaemon.engine
 ```
 
 This is a **long-running loop**, not a one-shot command: it catches up on the candles it
@@ -189,7 +189,7 @@ and going live is a [separate, deliberate decision](#live-mode-module-1--a-delib
 In a second terminal, with the environment activated:
 
 ```bash
-streamlit run src/trademon/dashboard/app.py
+streamlit run src/tradaemon/dashboard/app.py
 ```
 
 Then open <http://localhost:8501>. Until the engine has run at least once the panel says
@@ -202,9 +202,9 @@ Finance, free and keyless.
 
 ```bash
 python scripts/portfolio_backtest.py --years 10   # rebalancing vs buy & hold
-python -m trademon.portfolio --backfill           # replay the full history and exit
-python -m trademon.portfolio --once               # one day and exit
-python -m trademon.portfolio                      # the daily loop (Ctrl-C to stop)
+python -m tradaemon.portfolio --backfill           # replay the full history and exit
+python -m tradaemon.portfolio --once               # one day and exit
+python -m tradaemon.portfolio                      # the daily loop (Ctrl-C to stop)
 ```
 
 The dashboard picks the portfolio books up on its own.
@@ -407,9 +407,9 @@ get rich.
 ### Paper trading
 
 ```bash
-python -m trademon.portfolio --backfill   # replay the full history and exit
-python -m trademon.portfolio --once       # one day and exit
-python -m trademon.portfolio              # the daily loop (Ctrl-C to stop)
+python -m tradaemon.portfolio --backfill   # replay the full history and exit
+python -m tradaemon.portfolio --once       # one day and exit
+python -m tradaemon.portfolio              # the daily loop (Ctrl-C to stop)
 ```
 
 Unlike the crypto engine, this module *does* take `--once` and `--backfill`.
@@ -598,7 +598,7 @@ Three rules they stand on, because without them the numbers lie:
    windows; for each window the model is retrained from scratch on candles from before
    it only.
 2. **The same cost model as production** — the backtest goes through
-   `trademon.backtest.runner`, which shares `execution/fills.py` with the engine.
+   `tradaemon.backtest.runner`, which shares `execution/fills.py` with the engine.
 3. **Naive reference points.** "Always long", "always short", "at random". A strategy
    that does not beat those has proved nothing — and comparing only against buy & hold is
    easy to fool yourself with, since in a bear market anything able to go short looks
@@ -626,7 +626,7 @@ python scripts/research/prob_calibration.py
 Counted that way, adding pairs can only raise the result, since it just appends another
 account to an average. A real book has one wallet and `risk.max_open_positions` slots
 that the pairs compete for. This script measures that competition through
-[`backtest/book.py`](src/trademon/backtest/book.py) — shared cash, shared cap, the same
+[`backtest/book.py`](src/tradaemon/backtest/book.py) — shared cash, shared cap, the same
 `RiskManager` the engine uses.
 
 ### Result (2026-08): the cap decides the outcome, not the board

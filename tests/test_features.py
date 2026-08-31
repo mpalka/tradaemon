@@ -1,7 +1,7 @@
 import numpy as np
 
-from trademon.features.engineering import FEATURE_COLUMNS, compute_features
-from trademon.models.train import walk_forward_splits
+from tradaemon.features.engineering import FEATURE_COLUMNS, compute_features
+from tradaemon.models.train import walk_forward_splits
 
 
 def test_all_declared_features_are_computed(ohlcv):

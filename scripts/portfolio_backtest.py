@@ -12,11 +12,11 @@ import logging
 
 import pandas as pd
 
-from trademon import i18n
-from trademon.portfolio.backtest import render_portfolio_report, run_portfolio_backtest
-from trademon.portfolio.config import load_portfolio_config
-from trademon.portfolio.data import download_etf, load_panel
-from trademon.research.log import log_experiment
+from tradaemon import i18n
+from tradaemon.portfolio.backtest import render_portfolio_report, run_portfolio_backtest
+from tradaemon.portfolio.config import load_portfolio_config
+from tradaemon.portfolio.data import download_etf, load_panel
+from tradaemon.research.log import log_experiment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("portfolio_backtest")

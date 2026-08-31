@@ -1,5 +1,5 @@
 [project]
-name = "trademon"
+name = "tradaemon"
 dynamic = ["version"]
 description = "Educational algorithmic-trading lab: an ML crypto scalper, an ETF rebalancer and a cross-sectional ranking study, all paper-traded. Not investment advice."
 readme = "README.md"
@@ -38,10 +38,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
-path = "src/trademon/__init__.py"
+path = "src/tradaemon/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/trademon"]
+packages = ["src/tradaemon"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

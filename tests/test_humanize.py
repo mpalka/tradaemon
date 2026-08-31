@@ -5,8 +5,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from trademon import i18n
-from trademon.dashboard import humanize
+from tradaemon import i18n
+from tradaemon.dashboard import humanize
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 H4_MS = 4 * 3_600_000

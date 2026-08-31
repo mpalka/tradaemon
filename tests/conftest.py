@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trademon.config import Config
-from trademon.features.engineering import FEATURE_COLUMNS
+from tradaemon.config import Config
+from tradaemon.features.engineering import FEATURE_COLUMNS
 
 
 def make_ohlcv(n: int = 500, seed: int = 7, start_price: float = 100.0) -> pd.DataFrame:

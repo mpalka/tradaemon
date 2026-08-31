@@ -1,6 +1,6 @@
 # Leading slashes matter. A bare `data/` matches a directory of that name at ANY
-# depth, so until 0.2.0 it also silently excluded the `src/trademon/data/` and
-# `src/trademon/models/` source packages — a clone of this repo did not import.
+# depth, so until 0.2.0 it also silently excluded the `src/tradaemon/data/` and
+# `src/tradaemon/models/` source packages — a clone of this repo did not import.
 # Anything meant to be a top-level artefact directory is anchored to the root.
 
 /.venv/

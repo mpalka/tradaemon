@@ -4,13 +4,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trademon.backtest.runner import run_backtest
-from trademon.engine.loop import Book
-from trademon.engine.state import RuntimeStore
-from trademon.execution.executors import PaperExecutor
-from trademon.execution.fills import check_bracket_exit
-from trademon.features.engineering import FEATURE_COLUMNS
-from trademon.labeling.triple_barrier import triple_barrier_labels
+from tradaemon.backtest.runner import run_backtest
+from tradaemon.engine.loop import Book
+from tradaemon.engine.state import RuntimeStore
+from tradaemon.execution.executors import PaperExecutor
+from tradaemon.execution.fills import check_bracket_exit
+from tradaemon.features.engineering import FEATURE_COLUMNS
+from tradaemon.labeling.triple_barrier import triple_barrier_labels
 
 from .conftest import FakeBundle, make_ohlcv
 from .test_labeling import make_flat_df

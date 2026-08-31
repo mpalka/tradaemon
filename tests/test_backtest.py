@@ -1,6 +1,6 @@
 import pytest
 
-from trademon.backtest.runner import render_report, run_backtest
+from tradaemon.backtest.runner import render_report, run_backtest
 
 from .conftest import FakeBundle, make_ohlcv
 

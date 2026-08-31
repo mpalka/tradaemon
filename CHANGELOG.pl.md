@@ -3,8 +3,27 @@
 *[English](CHANGELOG.md) · Polski*
 
 Najnowsze na górze. Numer wersji z tego pliku musi zgadzać się z `__version__`
-w `src/trademon/__init__.py`, a angielska historia zmian musi obejmować te same wersje —
+w `src/tradaemon/__init__.py`, a angielska historia zmian musi obejmować te same wersje —
 pilnuje obu rzeczy `tests/test_version.py`.
+
+## 0.2.1 — 2026-08-31
+
+- **Pakiet nazywa się `tradaemon`, nie `trademon`.** Projekt odzywał się na trzy pisownie
+  naraz: repozytorium to `Tradaemon`, import `trademon`, a dokumentacja pisała
+  `TraDaemon`. Prawdziwą niespójnością było brakujące „a", a publiczne repozytorium to złe
+  miejsce, żeby je trzymać. `src/trademon/` to teraz `src/tradaemon/`, a za tym idą
+  wszystkie importy, komendy i ścieżki — `python -m tradaemon.engine`, `streamlit run
+  src/tradaemon/dashboard/app.py`. Stylizowana nazwa wyświetlana zostaje jako
+  **TraDaemon**, zgodnie z tą samą konwencją, którą stosuje PyTorch i podobne projekty:
+  identyfikator małymi literami, znak firmowy z wielkimi.
+- Starsze wpisy w historii zmian też przepisano na nową ścieżkę modułu. Historia cytująca
+  ścieżki, które już nie istnieją, nie jest uczciwsza — jest tylko mniej użyteczna.
+- **Jeśli już uruchamiasz to na NAS-ie, to migracja, a nie zwykłe wdrożenie.** Nazwa
+  projektu w Compose bierze się z katalogu, więc `/volume1/docker/trademon` staje się
+  `/volume1/docker/tradaemon`, kontenery nazywają się `tradaemon-bot-1`, a sieć Dockera
+  `tradaemon_default` — co ma znaczenie, jeśli reguła zapory DSM była przypięta do starej
+  podsieci. Przenieś katalog przed przebudową, a `runtime/` pojedzie razem z nim i żadna
+  księga nie straci historii.
 
 ## 0.2.0 — 2026-08-31
 
@@ -14,7 +33,7 @@ pierwszego commita.
 
 - **Klon tego repozytorium się nie importował.** `.gitignore` miał gołe wpisy `data/`
   i `models/`, a te pasują do katalogu o takiej nazwie na **dowolnej** głębokości — więc
-  `src/trademon/data/` (4 pliki) i `src/trademon/models/` (2 pliki) nigdy nie trafiły do
+  `src/tradaemon/data/` (4 pliki) i `src/tradaemon/models/` (2 pliki) nigdy nie trafiły do
   gita. Są importowane z kilkunastu miejsc, w tym z silnika, backtestera i panelu. Nikt
   tego nie zauważył, bo pliki istnieją na maszynie, na której projekt powstał. Każdy
   katalog artefaktów najwyższego poziomu jest teraz zakotwiczony ukośnikiem, a sześć
@@ -24,7 +43,7 @@ pierwszego commita.
   w obu językach: handel na papierze, brak porady inwestycyjnej, brak gwarancji i to, że
   panel nie ma logowania. `pyproject.toml` niesie licencję i klasyfikatory.
 - **Panel i dokumentacja mówią po angielsku tak samo jak po polsku.** Nowy moduł
-  `trademon.i18n` i dwa katalogi komunikatów w `trademon.locales` — zwykłe słowniki, bez
+  `tradaemon.i18n` i dwa katalogi komunikatów w `tradaemon.locales` — zwykłe słowniki, bez
   gettextu, bez nowej zależności. Panel wybiera język na sesję (prawy górny róg albo
   `?lang=`), co ma znaczenie, bo jeden proces Streamlita obsługuje kilku widzów; silnik,
   webhook i drukowane raporty czytają `display_language` z konfiguracji, bo nie mają kogo
@@ -58,12 +77,12 @@ pierwszego commita.
   liczbę testów — deklarowało 74, jest 294. Przewodnik po Synology został uogólniony: bez
   adresów z sieci domowej, bez prywatnych nazw kluczy, a anegdoty przepisane w drugiej
   osobie.
-- **Poprawione: `python -m trademon.engine --once` nigdy nie istniało.** README opisywało
+- **Poprawione: `python -m tradaemon.engine --once` nigdy nie istniało.** README opisywało
   tę flagę jako „przetwórz jedną świecę i zakończ" od 0.1.0, ale punkt wejścia silnika nie
   parsuje żadnych argumentów — po cichu ignorował `--once` i uruchamiał pętlę 4h na stałe.
   Na NAS-ie nieszkodliwe, w przewodniku „od zera" wprost mylące, bo nowa osoba dostawała
   polecenie jednorazowe, które nigdy nie wraca. Oba README mówią teraz, co to robi.
-  `python -m trademon.portfolio` naprawdę przyjmuje `--once` i `--backfill`; nie robi tego
+  `python -m tradaemon.portfolio` naprawdę przyjmuje `--once` i `--backfill`; nie robi tego
   wyłącznie silnik krypto.
 
 ## 0.1.16 — 2026-08-12
@@ -435,7 +454,7 @@ pierwszego commita.
 ## 0.1.1 — 2026-08-07
 
 - Panel pokazuje numer wersji pod tytułem, na każdym module.
-- Wersja trzymana w jednym miejscu (`src/trademon/__init__.py`); `pyproject.toml`
+- Wersja trzymana w jednym miejscu (`src/tradaemon/__init__.py`); `pyproject.toml`
   czyta ją przy budowaniu pakietu.
 
 ## 0.1.0

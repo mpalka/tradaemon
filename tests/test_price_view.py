@@ -8,7 +8,7 @@ tooltip says, and how the two trade journals map onto the same chart marks.
 import pandas as pd
 import pytest
 
-from trademon.dashboard import price_view as pv
+from tradaemon.dashboard import price_view as pv
 
 
 @pytest.fixture

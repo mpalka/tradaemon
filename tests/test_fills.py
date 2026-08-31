@@ -1,7 +1,7 @@
 import pytest
 
-from trademon.config import CostsConfig
-from trademon.execution.fills import (
+from tradaemon.config import CostsConfig
+from tradaemon.execution.fills import (
     buy_fill,
     check_bracket_exit,
     limit_buy_fills,

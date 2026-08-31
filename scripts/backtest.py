@@ -13,12 +13,12 @@ import logging
 import numpy as np
 import pandas as pd
 
-from trademon import i18n
-from trademon.backtest.runner import render_html_report, render_report, run_backtest
-from trademon.config import load_config
-from trademon.data import storage
-from trademon.models.train import load_bundles
-from trademon.research.log import log_experiment
+from tradaemon import i18n
+from tradaemon.backtest.runner import render_html_report, render_report, run_backtest
+from tradaemon.config import load_config
+from tradaemon.data import storage
+from tradaemon.models.train import load_bundles
+from tradaemon.research.log import log_experiment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("backtest")

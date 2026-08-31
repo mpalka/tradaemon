@@ -12,11 +12,11 @@ import pandas as pd
 import pytest
 import yaml
 
-from trademon import config_store as cs
-from trademon.config import Config, load_config, overrides_path
-from trademon.engine.loop import Book
-from trademon.engine.state import RuntimeStore
-from trademon.execution.executors import PaperExecutor
+from tradaemon import config_store as cs
+from tradaemon.config import Config, load_config, overrides_path
+from tradaemon.engine.loop import Book
+from tradaemon.engine.state import RuntimeStore
+from tradaemon.execution.executors import PaperExecutor
 
 from .conftest import FakeBundle, make_ohlcv
 
@@ -155,7 +155,7 @@ def test_restart_flag_roundtrip(tmp_path):
 def test_restart_watcher_ignores_a_stale_flag(cfg_path, tmp_path, monkeypatch):
     """A flag left over from a previous run must not send the engine into a restart
     loop on startup — only a request made after this process started counts."""
-    from trademon.engine import loop as engine_loop
+    from tradaemon.engine import loop as engine_loop
 
     cfg = load_config(cfg_path)
     cs.request_restart(cfg.paths.runtime_dir)          # written *before* the watcher starts
@@ -171,7 +171,7 @@ def test_restart_watcher_ignores_a_stale_flag(cfg_path, tmp_path, monkeypatch):
 
 
 def test_restart_watcher_fires_on_a_fresh_request(cfg_path, tmp_path, monkeypatch):
-    from trademon.engine import loop as engine_loop
+    from tradaemon.engine import loop as engine_loop
 
     cfg = load_config(cfg_path)
     monkeypatch.setattr(engine_loop, "RESTART_POLL_SECONDS", 0.01)
@@ -340,7 +340,7 @@ def test_a_reload_that_failed_is_retried_not_remembered(cfg_path, tmp_path, monk
     two candles. That is the case the old ordering lost: it recorded the file as handled
     *before* trying to load it, so one unlucky read stranded the book on its previous
     parameters until someone restarted the container."""
-    from trademon.engine import loop as loop_mod
+    from tradaemon.engine import loop as loop_mod
 
     cfg = load_config(cfg_path)
     book = _book(cfg, tmp_path, prob=0.99)
@@ -458,7 +458,7 @@ def test_drift_ignores_a_book_written_by_an_older_engine(cfg_path, tmp_path):
 def _shipped() -> Config:
     """The real config/config.yaml, not a fixture — overrides deliberately ignored
     so this tests what is committed, not what a local panel edit did to it."""
-    from trademon.config import PROJECT_ROOT
+    from tradaemon.config import PROJECT_ROOT
     path = PROJECT_ROOT / "config" / "config.yaml"
     return Config.model_validate(yaml.safe_load(path.read_text()))
 

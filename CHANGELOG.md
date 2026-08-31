@@ -3,8 +3,27 @@
 *English · [Polski](CHANGELOG.pl.md)*
 
 Newest first. The version at the top of this file must match `__version__` in
-`src/trademon/__init__.py`, and the Polish changelog must cover the same versions —
+`src/tradaemon/__init__.py`, and the Polish changelog must cover the same versions —
 `tests/test_version.py` enforces both.
+
+## 0.2.1 — 2026-08-31
+
+- **The package is `tradaemon`, not `trademon`.** The project answered to three spellings
+  at once: the repository was `Tradaemon`, the import was `trademon`, and the docs wrote
+  `TraDaemon`. The missing "a" was the real inconsistency, and a public repository is a
+  bad place to keep it. `src/trademon/` is now `src/tradaemon/`, and every import, command
+  and path follows — `python -m tradaemon.engine`, `streamlit run
+  src/tradaemon/dashboard/app.py`. The stylised display name stays **TraDaemon**, which is
+  the same convention PyTorch and similar projects use: a lowercase identifier and a
+  capitalised mark.
+- Older changelog entries were rewritten to the new module path too. A history that cites
+  paths which no longer exist is not more honest, only less useful.
+- **If you already run this on a NAS, it is a migration, not a redeploy.** The compose
+  project name comes from the directory, so `/volume1/docker/trademon` becomes
+  `/volume1/docker/tradaemon`, containers become `tradaemon-bot-1`, and the Docker network
+  becomes `tradaemon_default` — which matters if your DSM firewall rule was pinned to the
+  old subnet. Move the directory before the rebuild and `runtime/` comes with it, so no
+  book loses its history.
 
 ## 0.2.0 — 2026-08-31
 
@@ -14,7 +33,7 @@ first commit.
 
 - **A clone of this repository did not import.** `.gitignore` had bare `data/` and
   `models/` entries, which match a directory of that name at **any** depth — so
-  `src/trademon/data/` (4 files) and `src/trademon/models/` (2 files) were never
+  `src/tradaemon/data/` (4 files) and `src/tradaemon/models/` (2 files) were never
   committed. They are imported from a dozen places, including the engine, the backtester
   and the dashboard. Nobody noticed because the files exist on the machine the project
   was written on. Every top-level artefact directory is now anchored with a leading
@@ -25,8 +44,8 @@ first commit.
   `DISCLAIMER.md` in both languages, covering paper trading, the absence of investment
   advice, the lack of any warranty, and the fact that the dashboard has no
   authentication. `pyproject.toml` carries the licence and the classifiers.
-- **The panel and the docs speak English as well as Polish.** A new `trademon.i18n`
-  module and two message catalogues in `trademon.locales` — plain dicts, no gettext, no
+- **The panel and the docs speak English as well as Polish.** A new `tradaemon.i18n`
+  module and two message catalogues in `tradaemon.locales` — plain dicts, no gettext, no
   new dependency. The dashboard picks its language per session (top right, or `?lang=`),
   which matters because one Streamlit process serves several viewers; the engine, the
   webhook and the printed reports read `display_language` from the config instead, since
@@ -60,12 +79,12 @@ first commit.
   and a corrected test count — it claimed 74; there are 294. The Synology guide was
   generalised: no home-network addresses, no personal key names, and the war stories
   rewritten in the second person.
-- **Corrected: `python -m trademon.engine --once` was never a thing.** The README had
+- **Corrected: `python -m tradaemon.engine --once` was never a thing.** The README had
   documented that flag as "process one candle and exit" since 0.1.0, but the engine's
   entry point parses no arguments at all — it ignored `--once` silently and ran the 4h
   loop forever. Harmless on a NAS, actively confusing in a from-scratch guide, where a
   newcomer would be told to run a one-shot command that never returns. Both READMEs now
-  say what it does. `python -m trademon.portfolio` really does take `--once` and
+  say what it does. `python -m tradaemon.portfolio` really does take `--once` and
   `--backfill`; only the crypto engine does not.
 
 ## 0.1.16 — 2026-08-12
@@ -437,7 +456,7 @@ first commit.
 ## 0.1.1 — 2026-08-07
 
 - The panel shows the version number under the title, on every module.
-- The version is kept in one place (`src/trademon/__init__.py`); `pyproject.toml` reads it
+- The version is kept in one place (`src/tradaemon/__init__.py`); `pyproject.toml` reads it
   when building the package.
 
 ## 0.1.0

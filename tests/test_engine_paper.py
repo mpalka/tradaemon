@@ -5,9 +5,9 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 
-from trademon.engine.loop import Book, Position, TradingEngine
-from trademon.engine.state import RuntimeStore
-from trademon.execution.executors import PaperExecutor
+from tradaemon.engine.loop import Book, Position, TradingEngine
+from tradaemon.engine.state import RuntimeStore
+from tradaemon.execution.executors import PaperExecutor
 
 from .conftest import FakeBundle, make_ohlcv
 
@@ -207,7 +207,7 @@ def test_a_stop_loss_never_rolls_over(engine, cfg):
 
 
 def test_hot_reload_swaps_models_when_file_changes(engine, tmp_path, monkeypatch):
-    import trademon.engine.loop as loop_mod
+    import tradaemon.engine.loop as loop_mod
 
     model_file = tmp_path / "model_long.joblib"
     model_file.write_text("v1")
@@ -371,7 +371,7 @@ class FlakyExchange:
 def test_bootstrap_waits_the_network_out_instead_of_dying(engine, cfg, tmp_path, monkeypatch):
     """The NAS failure: without this the process exits and Docker restarts it
     straight back into the same lookup — 826 times in five hours."""
-    import trademon.engine.loop as loop_mod
+    import tradaemon.engine.loop as loop_mod
     monkeypatch.setattr(loop_mod, "RETRY_SECONDS", 0.0)
     monkeypatch.setattr(loop_mod, "MAX_RETRY_SECONDS", 0.0)
 
@@ -396,7 +396,7 @@ def test_an_outage_from_a_previous_container_is_closed_on_recovery(engine, cfg, 
     the event log keeps saying the exchange is unreachable — for hours, until some
     unrelated event scrolls it down. The reader cannot tell recovery from silence.
     """
-    import trademon.engine.loop as loop_mod
+    import tradaemon.engine.loop as loop_mod
     monkeypatch.setattr(loop_mod, "RETRY_SECONDS", 0.0)
     monkeypatch.setattr(loop_mod, "MAX_RETRY_SECONDS", 0.0)
 
@@ -421,14 +421,14 @@ def test_an_alert_carries_both_a_key_and_a_rendered_sentence(engine):
     assert rec["params"] == {"dd": "-4.2"}
     assert rec["message"] == "obsunięcie -4.2% od szczytu kapitału"
 
-    from trademon.dashboard import humanize
+    from tradaemon.dashboard import humanize
     assert humanize.event_line(rec)["text"] == rec["message"]
 
 
 def test_a_clean_start_does_not_invent_a_recovery(engine, cfg, monkeypatch):
     """No outage on record means nothing to close — otherwise every restart would
     file a 'connection restored' for a connection that was never lost."""
-    import trademon.engine.loop as loop_mod
+    import tradaemon.engine.loop as loop_mod
     monkeypatch.setattr(loop_mod, "RETRY_SECONDS", 0.0)
     monkeypatch.setattr(loop_mod, "MAX_RETRY_SECONDS", 0.0)
 

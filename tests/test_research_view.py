@@ -7,9 +7,9 @@ that pick which report to show and how its date is read.
 import pandas as pd
 import pytest
 
-from trademon import i18n
-from trademon.dashboard import research_view as rv
-from trademon.portfolio.correlation import VERDICT_KEYS
+from tradaemon import i18n
+from tradaemon.dashboard import research_view as rv
+from tradaemon.portfolio.correlation import VERDICT_KEYS
 
 
 def test_latest_picks_the_newest_report(tmp_path, monkeypatch):
@@ -44,7 +44,7 @@ def test_stamp_degrades_gracefully_on_an_odd_filename(tmp_path):
 def test_every_verdict_has_a_colour_and_an_explanation():
     """A verdict rendered without its meaning is how 'low correlation' gets read as
     'good' — the traps are exactly the ones with the best correlations."""
-    from trademon.portfolio.correlation import classify
+    from tradaemon.portfolio.correlation import classify
     produced = {
         classify(0.10, 0.30, 8.0), classify(0.10, 0.75, 8.0),
         classify(0.80, 0.90, 8.0), classify(0.10, 0.30, -2.0),

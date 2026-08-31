@@ -35,12 +35,12 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # allow `import train`
 from train import build_dataset
 
-from trademon.backtest.runner import run_backtest
-from trademon.config import load_config
-from trademon.data import storage
-from trademon.data.ingestion import download_symbol
-from trademon.models.train import train_walk_forward
-from trademon.research.lab import Window, buy_hold_pct, control_bundles, test_slice
+from tradaemon.backtest.runner import run_backtest
+from tradaemon.config import load_config
+from tradaemon.data import storage
+from tradaemon.data.ingestion import download_symbol
+from tradaemon.models.train import train_walk_forward
+from tradaemon.research.lab import Window, buy_hold_pct, control_bundles, test_slice
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("refresh")

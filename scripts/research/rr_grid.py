@@ -24,8 +24,8 @@ import warnings
 
 import pandas as pd
 
-from trademon.config import load_config
-from trademon.research.lab import (
+from tradaemon.config import load_config
+from tradaemon.research.lab import (
     Window,
     control_bundles,
     enough_history,

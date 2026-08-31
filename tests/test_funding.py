@@ -1,8 +1,8 @@
 import numpy as np
 import pandas as pd
 
-from trademon.data.funding import perp_symbol
-from trademon.features.engineering import (
+from tradaemon.data.funding import perp_symbol
+from tradaemon.features.engineering import (
     FUNDING_FEATURE_COLUMNS,
     active_feature_columns,
     compute_features,

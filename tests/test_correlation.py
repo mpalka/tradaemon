@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trademon.portfolio.correlation import (
+from tradaemon.portfolio.correlation import (
     classify,
     monthly_returns,
     screen,

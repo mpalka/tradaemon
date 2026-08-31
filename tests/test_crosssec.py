@@ -10,19 +10,19 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trademon.crosssec.backtest import (
+from tradaemon.crosssec.backtest import (
     equal_weight_benchmark,
     gross_of_noise,
     run_crosssec_backtest,
 )
-from trademon.crosssec.config import CrossSecConfig, MarketConfig, RankConfig, SignalConfig
-from trademon.crosssec.signal import (
+from tradaemon.crosssec.config import CrossSecConfig, MarketConfig, RankConfig, SignalConfig
+from tradaemon.crosssec.signal import (
     momentum_scores,
     select_legs,
     target_weights,
     weights_at,
 )
-from trademon.crosssec.validate import split_windows
+from tradaemon.crosssec.validate import split_windows
 
 
 def make_panel(n_days: int, trends: dict[str, float], start: float = 100.0) -> pd.DataFrame:

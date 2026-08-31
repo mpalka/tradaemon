@@ -6,8 +6,8 @@ Usage: python scripts/download_data.py --days 365
 import argparse
 import logging
 
-from trademon.config import load_config
-from trademon.data.ingestion import download_symbol
+from tradaemon.config import load_config
+from tradaemon.data.ingestion import download_symbol
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 

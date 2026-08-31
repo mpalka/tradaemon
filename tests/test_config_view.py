@@ -13,9 +13,9 @@ import json
 
 import pytest
 
-from trademon import i18n
-from trademon.dashboard import config_view as cv
-from trademon.dashboard import journals
+from tradaemon import i18n
+from tradaemon.dashboard import config_view as cv
+from tradaemon.dashboard import journals
 
 
 def state(*, positions: int, cap: int, pct: float = 0.10, signals: dict | None = None):

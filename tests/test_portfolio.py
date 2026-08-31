@@ -6,19 +6,19 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trademon.config import CostsConfig
-from trademon.engine.state import RuntimeStore
-from trademon.portfolio import allocator
-from trademon.portfolio.backtest import run_portfolio_backtest
-from trademon.portfolio.book import PortfolioBook
-from trademon.portfolio.config import (
+from tradaemon.config import CostsConfig
+from tradaemon.engine.state import RuntimeStore
+from tradaemon.portfolio import allocator
+from tradaemon.portfolio.backtest import run_portfolio_backtest
+from tradaemon.portfolio.book import PortfolioBook
+from tradaemon.portfolio.config import (
     AssetConfig,
     PortfolioConfig,
     RebalanceConfig,
     TrendConfig,
 )
-from trademon.portfolio.data import parse_stooq_csv, parse_yahoo_chart
-from trademon.portfolio.rebalance import settle_orders
+from tradaemon.portfolio.data import parse_stooq_csv, parse_yahoo_chart
+from tradaemon.portfolio.rebalance import settle_orders
 
 ZERO_COSTS = CostsConfig(taker_fee=0.0, maker_fee=0.0, slippage_bps=0.0)
 

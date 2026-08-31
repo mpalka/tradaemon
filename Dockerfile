@@ -12,4 +12,4 @@ RUN pip install --no-cache-dir .
 COPY config ./config
 COPY scripts ./scripts
 
-CMD ["python", "-m", "trademon.engine"]
+CMD ["python", "-m", "tradaemon.engine"]

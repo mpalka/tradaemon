@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from trademon import i18n
-from trademon.dashboard import humanize
-from trademon.locales import CATALOGUES
+from tradaemon import i18n
+from tradaemon.dashboard import humanize
+from tradaemon.locales import CATALOGUES
 
 SRC = Path(__file__).resolve().parents[1] / "src"
 
@@ -88,7 +88,7 @@ def test_runtime_built_keys_exist():
 
 def test_every_settings_field_has_a_label_and_a_help_text():
     """`Field` derives its keys from `path`, so the AST scan above cannot see them."""
-    from trademon.dashboard.config_view import CRYPTO_SECTIONS, PORTFOLIO_SECTIONS
+    from tradaemon.dashboard.config_view import CRYPTO_SECTIONS, PORTFOLIO_SECTIONS
 
     fields = [f for section in (*CRYPTO_SECTIONS.values(), *PORTFOLIO_SECTIONS.values())
               for f in section]
@@ -101,7 +101,7 @@ def test_every_settings_field_has_a_label_and_a_help_text():
 
 
 def test_every_settings_section_has_a_heading():
-    from trademon.dashboard.config_view import CRYPTO_SECTIONS, PORTFOLIO_SECTIONS
+    from tradaemon.dashboard.config_view import CRYPTO_SECTIONS, PORTFOLIO_SECTIONS
 
     for section in (*CRYPTO_SECTIONS, *PORTFOLIO_SECTIONS):
         for lang in CATALOGUES:

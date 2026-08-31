@@ -97,8 +97,8 @@ Komendy różnią się wyłącznie sposobem aktywacji środowiska.
 <summary><b>macOS / Linux</b></summary>
 
 ```bash
-git clone https://github.com/<twoje-konto>/trademon.git
-cd trademon
+git clone https://github.com/mpalka/tradaemon.git
+cd tradaemon
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -110,8 +110,8 @@ cp .env.example .env          # może zostać pusty; tryb paper nie potrzebuje k
 <summary><b>Windows (PowerShell)</b></summary>
 
 ```powershell
-git clone https://github.com/<twoje-konto>/trademon.git
-cd trademon
+git clone https://github.com/mpalka/tradaemon.git
+cd tradaemon
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
@@ -170,7 +170,7 @@ się przewagi bliskiej zeru — to jest uczciwy wynik, a nie zepsuta instalacja.
 ### 6. Uruchom bota na symulowanych pieniądzach
 
 ```bash
-python -m trademon.engine
+python -m tradaemon.engine
 ```
 
 To jest **długo działająca pętla**, a nie polecenie jednorazowe: nadrabia świece, które
@@ -187,7 +187,7 @@ domyślny, a przejście na live to [osobna, świadoma decyzja](#tryb-live-moduł
 W drugim terminalu, z aktywnym środowiskiem:
 
 ```bash
-streamlit run src/trademon/dashboard/app.py
+streamlit run src/tradaemon/dashboard/app.py
 ```
 
 Potem wejdź na <http://localhost:8501>. Dopóki silnik nie przejdzie choć raz, panel
@@ -200,9 +200,9 @@ Finance, za darmo i bez klucza.
 
 ```bash
 python scripts/portfolio_backtest.py --years 10   # rebalans vs kup i trzymaj
-python -m trademon.portfolio --backfill           # replay pełnej historii i koniec
-python -m trademon.portfolio --once               # jeden dzień i koniec
-python -m trademon.portfolio                      # pętla dzienna (Ctrl-C, żeby zatrzymać)
+python -m tradaemon.portfolio --backfill           # replay pełnej historii i koniec
+python -m tradaemon.portfolio --once               # jeden dzień i koniec
+python -m tradaemon.portfolio                      # pętla dzienna (Ctrl-C, żeby zatrzymać)
 ```
 
 Panel sam wykryje księgi portfela.
@@ -381,9 +381,9 @@ ale zmniejsza obsunięcia. Edukacyjny tool, nie strategia do bogacenia się.
 ### Paper trading
 
 ```bash
-python -m trademon.portfolio --backfill   # replay pełnej historii (5452 dni) i koniec
-python -m trademon.portfolio --once       # jeden dzień i koniec
-python -m trademon.portfolio              # pętla dzienna (śpi 6h; Ctrl-C, żeby zatrzymać)
+python -m tradaemon.portfolio --backfill   # replay pełnej historii (5452 dni) i koniec
+python -m tradaemon.portfolio --once       # jeden dzień i koniec
+python -m tradaemon.portfolio              # pętla dzienna (śpi 6h; Ctrl-C, żeby zatrzymać)
 
 W odróżnieniu od silnika krypto ten moduł **przyjmuje** `--once` i `--backfill`.
 ```
@@ -562,7 +562,7 @@ Trzy zasady, na których stoją (bo bez nich liczby kłamią):
    cięta na rozłączne 60-dniowe okna; dla każdego okna model uczy się od nowa
    wyłącznie na świecach sprzed niego.
 2. **Ten sam model kosztów co produkcja** — backtest idzie przez
-   `trademon.backtest.runner`, który dzieli `execution/fills.py` z silnikiem.
+   `tradaemon.backtest.runner`, który dzieli `execution/fills.py` z silnikiem.
 3. **Naiwne punkty odniesienia.** „Zawsze graj na wzrost", „zawsze na spadek",
    „losowo". Strategia, która ich nie bije, niczego nie udowodniła — a przy
    porównaniu tylko do „kup i trzymaj" łatwo się oszukać (w bessie każda
@@ -587,7 +587,7 @@ Trzy zasady, na których stoją (bo bez nich liczby kłamią):
 liczbę slotów**. Przy takim liczeniu dorzucenie par może wynik tylko podnieść, bo
 to zwykłe dopisanie kolejnego rachunku do średniej. Prawdziwa księga ma jeden
 portfel i `risk.max_open_positions` miejsc, o które pary konkurują. Ten skrypt
-liczy tę konkurencję przez [`backtest/book.py`](src/trademon/backtest/book.py) —
+liczy tę konkurencję przez [`backtest/book.py`](src/tradaemon/backtest/book.py) —
 wspólna gotówka, wspólny limit, ten sam `RiskManager` co silnik.
 
 ### Wynik (2026-08): o wyniku decyduje limit, nie plansza

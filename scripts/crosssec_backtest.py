@@ -15,12 +15,12 @@ import logging
 
 import pandas as pd
 
-from trademon import i18n
-from trademon.crosssec.config import load_crosssec_config
-from trademon.crosssec.panels import refresh_market
-from trademon.crosssec.validate import run_matrix, verdict
-from trademon.i18n import t
-from trademon.research.log import log_experiment
+from tradaemon import i18n
+from tradaemon.crosssec.config import load_crosssec_config
+from tradaemon.crosssec.panels import refresh_market
+from tradaemon.crosssec.validate import run_matrix, verdict
+from tradaemon.i18n import t
+from tradaemon.research.log import log_experiment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("crosssec")

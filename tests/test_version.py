@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from trademon import __version__
+from tradaemon import __version__
 
 ROOT = Path(__file__).resolve().parents[1]
 CHANGELOGS = {"en": ROOT / "CHANGELOG.md", "pl": ROOT / "CHANGELOG.pl.md"}

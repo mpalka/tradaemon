@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trademon.backtest.metrics import (
+from tradaemon.backtest.metrics import (
     avg_exposure_pct,
     exposure_series,
     periods_per_year,
@@ -16,11 +16,11 @@ from trademon.backtest.metrics import (
     summarize,
     time_in_market_pct,
 )
-from trademon.config import VariantConfig
-from trademon.engine.loop import Book, build_books
-from trademon.engine.state import RuntimeStore
-from trademon.execution.executors import PaperExecutor
-from trademon.research.log import load_experiments, log_experiment
+from tradaemon.config import VariantConfig
+from tradaemon.engine.loop import Book, build_books
+from tradaemon.engine.state import RuntimeStore
+from tradaemon.execution.executors import PaperExecutor
+from tradaemon.research.log import load_experiments, log_experiment
 
 from .conftest import FakeBundle, make_ohlcv
 
@@ -87,7 +87,7 @@ def test_summarize_reports_exposure_only_when_cash_is_known():
 
 def test_buy_hold_curve_is_the_all_in_benchmark():
     # imported here: dashboard.app runs streamlit setup at import time
-    from trademon.dashboard.app import buy_hold_curve
+    from tradaemon.dashboard.app import buy_hold_curve
 
     df = pd.DataFrame({
         "timestamp": ["2026-01-01T00:00:00+00:00", "2026-01-02T00:00:00+00:00"],

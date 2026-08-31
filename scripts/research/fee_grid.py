@@ -21,8 +21,8 @@ import warnings
 
 import pandas as pd
 
-from trademon.config import load_config
-from trademon.research.lab import (
+from tradaemon.config import load_config
+from tradaemon.research.lab import (
     COST_SCENARIOS,
     Window,
     control_bundles,

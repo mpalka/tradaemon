@@ -1,7 +1,7 @@
 services:
   bot:
     build: .
-    command: python -m trademon.engine
+    command: python -m tradaemon.engine
     # No `dns:` here on purpose. It was added on the guide's theory that DSM leaves
     # a loopback address in /etc/resolv.conf, which inside a container points at the
     # container — but measured on the actual NAS that was simply untrue (the host
@@ -24,7 +24,7 @@ services:
 
   dashboard:
     build: .
-    command: streamlit run src/trademon/dashboard/app.py --server.address 0.0.0.0 --server.port 8501
+    command: streamlit run src/tradaemon/dashboard/app.py --server.address 0.0.0.0 --server.port 8501
     ports:
       - "8501:8501"
     volumes:
@@ -38,7 +38,7 @@ services:
   # a diversified ETF basket toward target weights. Shares the dashboard.
   portfolio:
     build: .
-    command: python -m trademon.portfolio
+    command: python -m tradaemon.portfolio
     # Classic string form: the extended `path:`/`required:` syntax needs
     # Compose 2.20+, which Synology's Container Manager does not ship.
     # Consequence: .env must exist — `cp .env.example .env` on a fresh checkout.

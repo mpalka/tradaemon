@@ -10,9 +10,9 @@ the threshold and would not have opened anyway.
 import pandas as pd
 import pytest
 
-from trademon.engine.loop import Book
-from trademon.engine.state import RuntimeStore
-from trademon.execution.executors import PaperExecutor
+from tradaemon.engine.loop import Book
+from tradaemon.engine.state import RuntimeStore
+from tradaemon.execution.executors import PaperExecutor
 
 from .conftest import FakeBundle, make_ohlcv
 

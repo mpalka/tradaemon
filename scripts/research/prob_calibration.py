@@ -71,9 +71,9 @@ import logging
 import numpy as np
 import pandas as pd
 
-from trademon.backtest.book import run_book_backtest
-from trademon.config import load_config
-from trademon.research.lab import (
+from tradaemon.backtest.book import run_book_backtest
+from tradaemon.config import load_config
+from tradaemon.research.lab import (
     Window,
     buy_hold_pct,
     control_bundles,
@@ -85,7 +85,7 @@ from trademon.research.lab import (
     window_frames,
     with_strategy,
 )
-from trademon.research.log import log_experiment
+from tradaemon.research.log import log_experiment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("prob_calibration")

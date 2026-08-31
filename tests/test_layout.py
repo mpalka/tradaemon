@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from trademon.dashboard import layout
+from tradaemon.dashboard import layout
 
 
 @pytest.fixture
