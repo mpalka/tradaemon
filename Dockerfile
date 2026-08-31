@@ -5,7 +5,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY pyproject.toml ./
+# README.md and LICENSE are build inputs, not documentation, because pyproject.toml
+# names them in `readme` and `license-files`: hatchling validates both while
+# generating metadata and fails the build outright if either is missing. They sit
+# beside pyproject.toml rather than later, where they would be too late to help.
+COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 RUN pip install --no-cache-dir .
 

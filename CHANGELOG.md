@@ -6,6 +6,21 @@ Newest first. The version at the top of this file must match `__version__` in
 `src/tradaemon/__init__.py`, and the Polish changelog must cover the same versions —
 `tests/test_version.py` enforces both.
 
+## 0.2.2 — 2026-08-31
+
+- **Fixed: the Docker image stopped building in 0.2.0, and only a real rebuild found
+  it.** Adding `readme = "README.md"` and `license-files = ["LICENSE"]` to
+  `pyproject.toml` turned both files into *build inputs* — hatchling validates them while
+  generating metadata — but the `Dockerfile` copies only `pyproject.toml` and `src/`
+  before `pip install .`. The build died on `OSError: Readme file does not exist:
+  README.md`. It passed locally throughout, because an editable install reads the file
+  from the working directory, where it obviously exists. The `Dockerfile` now copies
+  `README.md` and `LICENSE` alongside `pyproject.toml`, with a comment saying why they
+  are not merely documentation. No extra cache cost: `COPY src` already invalidates that
+  layer on every code change.
+- The lesson worth keeping: packaging metadata that names a file is a build dependency on
+  that file, and an editable install cannot tell you when one is missing.
+
 ## 0.2.1 — 2026-08-31
 
 - **The package is `tradaemon`, not `trademon`.** The project answered to three spellings

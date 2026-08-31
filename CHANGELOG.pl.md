@@ -6,6 +6,21 @@ Najnowsze na górze. Numer wersji z tego pliku musi zgadzać się z `__version__
 w `src/tradaemon/__init__.py`, a angielska historia zmian musi obejmować te same wersje —
 pilnuje obu rzeczy `tests/test_version.py`.
 
+## 0.2.2 — 2026-08-31
+
+- **Naprawione: obraz Dockera przestał się budować w 0.2.0, a znalazła to dopiero
+  prawdziwa przebudowa.** Dodanie `readme = "README.md"` i `license-files = ["LICENSE"]`
+  do `pyproject.toml` zamieniło oba pliki w *wejścia builda* — hatchling waliduje je przy
+  generowaniu metadanych — a `Dockerfile` kopiuje przed `pip install .` wyłącznie
+  `pyproject.toml` i `src/`. Build wywalał się na `OSError: Readme file does not exist:
+  README.md`. Lokalnie przechodziło przez cały czas, bo instalacja edytowalna czyta ten
+  plik z katalogu roboczego, gdzie oczywiście jest. `Dockerfile` kopiuje teraz `README.md`
+  i `LICENSE` obok `pyproject.toml`, z komentarzem wyjaśniającym, że to nie jest sama
+  dokumentacja. Bez dodatkowego kosztu cache: `COPY src` i tak unieważnia tę warstwę przy
+  każdej zmianie kodu.
+- Wniosek wart zapamiętania: metadane pakietu, które wskazują plik, są zależnością builda
+  od tego pliku — a instalacja edytowalna nigdy nie powie ci, że któregoś brakuje.
+
 ## 0.2.1 — 2026-08-31
 
 - **Pakiet nazywa się `tradaemon`, nie `trademon`.** Projekt odzywał się na trzy pisownie
