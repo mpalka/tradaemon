@@ -41,6 +41,7 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
+from trademon import i18n
 from trademon.backtest.metrics import periods_per_year, summarize
 from trademon.config import Config
 from trademon.data import storage
@@ -82,6 +83,7 @@ class _Position:
     margin: float
     deadline_i: int  # index in *this pair's* frame, mirroring runner.py
     entry_ts: pd.Timestamp
+    entry_prob: float  # what the model said on the signal bar; carried to the trade
 
 
 def _prepare(
@@ -205,6 +207,10 @@ def run_book_backtest(
             "entry_time": p.entry_ts, "exit_time": now, "qty": p.qty,
             "entry_price": p.entry_price, "exit_price": fill.price,
             "exit_reason": reason, "fees": p.entry_fees + fill.fee, "pnl": pnl,
+            # The probability that opened this trade. Kept because without it there is
+            # no way to ask whether a confident signal was a better trade than a
+            # barely-above-threshold one — the question sizing by conviction rests on.
+            "prob": p.entry_prob,
         })
         risk.record_realized_pnl(pnl, now.to_pydatetime(), equity())
 
@@ -303,6 +309,7 @@ def run_book_backtest(
                 # the signal is bar i, the fill is bar i+1 — stamp the fill, the
                 # same way runner.py does, or the journal backdates every entry
                 entry_ts=pd.Timestamp(s.ts[i + 1]),
+                entry_prob=prob,
             )
             n_fills += 1
             max_concurrent = max(max_concurrent, len(positions))
@@ -349,16 +356,23 @@ def render_book_report(results: list[dict], cfg: Config) -> str:
     """One line per configuration, so the comparison fits on a screen."""
     lines = ["=" * 78, "TRADEMON BOOK BACKTEST (one wallet, shared position cap)", "=" * 78]
     period = results[0]["summary"]["period"] if results else {"start": "", "end": ""}
-    lines.append(f"okres: {period['start']} .. {period['end']}  "
-                 f"timeframe {cfg.exchange.timeframe}")
+    lines.append(i18n.t("report.book.period", start=period["start"], end=period["end"],
+                   timeframe=cfg.exchange.timeframe))
     lines.append("")
-    header = (f"{'plansza':>8} {'przydział':>11} {'limit':>6} {'wynik':>9} {'sharpe':>7} "
-              f"{'maxDD':>8} {'trans.':>7} {'sygnały':>8} {'bez slotu':>10} {'w rynku':>8}")
+    # Fixed-width columns: each heading is padded to the width its numbers need, so a
+    # longer translation widens the column instead of breaking the alignment.
+    header = (f"{i18n.t('report.book.col.board'):>8} {i18n.t('report.book.col.allocation'):>11} "
+              f"{i18n.t('report.book.col.cap'):>6} {i18n.t('report.book.col.result'):>9} "
+              f"{i18n.t('report.book.col.sharpe'):>7} {i18n.t('report.book.col.max_dd'):>8} "
+              f"{i18n.t('report.book.col.trades'):>7} {i18n.t('report.book.col.signals'):>8} "
+              f"{i18n.t('report.book.col.no_slot'):>10} {i18n.t('report.book.col.in_market'):>8}")
     lines += [header, "-" * len(header)]
+    pairs_word = i18n.t("report.book.pairs")
     for r in results:
         s = r["summary"]
         lines.append(
-            f"{s['n_symbols']:>6} par {s['allocation']:>11} {s['max_open_positions']:>6} "
+            f"{s['n_symbols']:>6} {pairs_word} {s['allocation']:>11} "
+            f"{s['max_open_positions']:>6} "
             f"{s['total_return_pct']:>+8.2f}% {s['sharpe']:>7.2f} "
             f"{s['max_drawdown_pct']:>7.2f}% {s['n_trades']:>7} {s['signals']:>8} "
             f"{s['slot_blocked']:>10} {s.get('time_in_market_pct', 0):>7.0f}%"

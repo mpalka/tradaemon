@@ -43,6 +43,17 @@ def test_rollover_replaces_timeout_exits(cfg):
     assert rolled["summary"]["fees_paid"] < plain["summary"]["fees_paid"]
 
 
+@pytest.mark.parametrize("style", ["taker", "maker"])
+def test_trades_carry_the_probability_that_opened_them(cfg, style):
+    """The maker path is the one worth testing: the order rests across bars, so the
+    probability has to wait with it rather than be read off the bar it fills on."""
+    cfg.execution.order_style = style
+    df = make_ohlcv(2000)
+    trades = run_backtest(df, FakeBundle(prob=0.77), cfg, "BTC/USDT")["trades"]
+    assert len(trades) > 0
+    assert trades["prob"].eq(0.77).all()
+
+
 def test_report_contains_verdict(cfg):
     df = make_ohlcv(800)
     result = run_backtest(df, FakeBundle(prob=0.99), cfg, "BTC/USDT")

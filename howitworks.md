@@ -1,847 +1,871 @@
-# Jak to działa (od środka)
+# How it works (from the inside)
 
-README opisuje **co** ten projekt robi i **jakie dał wyniki**. Ten plik opisuje
-**mechanizm**: jaką drogę przechodzi jedna świeca od giełdy do zlecenia, jak wygląda
-gra, którą bot faktycznie prowadzi (§4), kto pisze i kto czyta które pliki, i dlaczego
-kilka rzeczy jest zrobionych inaczej, niż wyglądałaby wersja oczywista.
+*English · [Polski](howitworks.pl.md)*
 
-Sekcje 1–3 są o **budowie**. Sekcja 4 i podsekcje „Mechanika" w kolejnych rozdziałach
-są o **zachowaniu**: co każdy komponent robi w kolejnych minutach, dniach i tygodniach,
-i co robi w przypadkach, w których nic ciekawego się nie dzieje — bo to jest jego
-domyślny stan.
+> This is an educational project running on simulated money. See
+> [DISCLAIMER.md](DISCLAIMER.md) and
+> [what to expect](README.md#what-to-expect-from-a-bot-like-this).
 
-Wersja kodu, którą opisuje ten dokument: `0.1.11`.
+The README describes **what** this project does and **what results it produced**. This
+file describes the **mechanism**: the path a single candle takes from the exchange to an
+order, what the game the bot is actually playing looks like (§4), who writes and who
+reads which file, and why several things are done differently from how the obvious
+version would look.
+
+Sections 1–3 are about **construction**. Section 4 and the "Mechanics" subsections in the
+chapters that follow are about **behaviour**: what each component does over the following
+minutes, days and weeks, and what it does in the cases where nothing interesting happens
+— because that is its default state.
+
+The code version this document describes: `0.2.0`.
 
 ---
 
-## 1. Widok z góry
+## 1. The view from above
 
-TraDaemon to **cztery procesy nad jednym katalogiem plików**. Nie ma bazy danych,
-nie ma kolejki, nie ma API między procesami. Cała komunikacja idzie przez dysk:
+TraDaemon is **four processes over one directory of files**. There is no database, no
+queue, no API between processes. All communication goes through the disk:
 
 ```
                    config/            data/            models/           runtime/
                    ───────            ─────            ───────           ────────
-  bot          czyta ──────►     czyta ──────►    czyta ──────►      PISZE ──────►
-  portfolio    czyta ──────►     czyta/pisze ►                        PISZE ──────►
-  refresher    czyta ──────►     PISZE ──────►    PISZE ──────►       pisze status
-  dashboard    czyta + PISZE     czyta ──────►    czyta ──────►       tylko czyta
+  bot          reads ──────►     reads ──────►    reads ──────►      WRITES ──────►
+  portfolio    reads ──────►     reads/writes ►                       WRITES ──────►
+  refresher    reads ──────►     WRITES ─────►    WRITES ─────►       writes status
+  dashboard    reads + WRITES    reads ──────►    reads ──────►       reads only
                 (overrides)
 ```
 
-Dwie zasady, z których wynika reszta architektury:
+Two rules, from which the rest of the architecture follows:
 
-1. **Silnik jest jedynym pisarzem stanu księgi.** `runtime/*/state.json` i dzienniki
-   `*.jsonl` pisze wyłącznie proces handlujący. Panel ich nigdy nie dotyka — czyta.
-   Dzięki temu dwa procesy nad tym samym bind-mountem nie potrzebują żadnego
-   zamka.
-2. **Panel jest jedynym pisarzem konfiguracji** — i to nie do `config/config.yaml`,
-   tylko do siostrzanego `config/config.overrides.yaml` (patrz §8).
+1. **The engine is the only writer of book state.** `runtime/*/state.json` and the
+   `*.jsonl` journals are written by the trading process alone. The panel never touches
+   them — it reads. That is why two processes over the same bind mount need no lock at
+   all.
+2. **The panel is the only writer of configuration** — and not to `config/config.yaml`
+   but to its sibling `config/config.overrides.yaml` (see §8).
 
-Ruch w drugą stronę — panel chce coś zmienić w silniku — idzie przez ten sam dysk:
-zapis nakładki (silnik podnosi ją sam) albo plik-flaga `runtime/restart_requested`
-(silnik wychodzi, Docker go wskrzesza).
+Traffic in the other direction — the panel wanting to change something in the engine —
+goes through the same disk: writing the overrides file (which the engine picks up by
+itself) or the `runtime/restart_requested` flag file (the engine exits, Docker
+resurrects it).
 
 ---
 
-## 2. Trzy moduły, jedno wspólne dno
+## 2. Three modules, one shared foundation
 
-| | Moduł 1 — scalper | Moduł 2 — zarządca portfela | Moduł 3 — ranking |
+| | Module 1 — scalper | Module 2 — portfolio manager | Module 3 — ranking |
 |---|---|---|---|
-| Pyta o | „czy ten instrument wzrośnie" | „czy proporcje się rozjechały" | „które aktywo jest silniejsze od reszty" |
-| Zegar | świeca 4h | dzień | ~20 dni |
-| Decyduje | model ML (LightGBM) | reguła (drift/kadencja) | ranking momentum |
-| Księga na żywo | tak (4 warianty) | tak (1) | **nie** — samo badanie |
-| Dane | Binance przez CCXT | Yahoo Finance | oba źródła |
+| Asks | "will this instrument rise" | "have the proportions drifted" | "which asset is stronger than the rest" |
+| Clock | a 4h candle | a day | ~20 days |
+| Decides by | an ML model (LightGBM) | a rule (drift/cadence) | a momentum ranking |
+| Live book | yes (4 variants) | yes (1) | **no** — a study only |
+| Data | Binance via CCXT | Yahoo Finance | both sources |
 
-Wspólne dla wszystkich: `execution/fills.py` (model kosztów), `engine/state.py`
-(`RuntimeStore` — persystencja i dzienniki), `backtest/metrics.py` (Sharpe,
-obsunięcie, ekspozycja) i panel.
+Shared by all of them: `execution/fills.py` (the cost model), `engine/state.py`
+(`RuntimeStore` — persistence and journals), `backtest/metrics.py` (Sharpe, drawdown,
+exposure) and the panel.
 
-To nie jest współdzielenie dla oszczędności linii. **Backtest i handel papierowy
-przechodzą przez ten sam plik od fillów**, więc „to, co zmierzył backtest" i „to, co
-robi bot" to dosłownie ta sama ścieżka wykonania — nie dwie implementacje tej samej
-umowy, które rozjeżdżają się przy pierwszej poprawce.
+This is not sharing to save lines. **The backtest and paper trading go through the same
+fills file**, so "what the backtest measured" and "what the bot does" are literally the
+same execution path — not two implementations of one contract that diverge at the first
+fix.
 
 ---
 
-## 3. Moduł 1: droga od świecy do zlecenia
+## 3. Module 1: the path from a candle to an order
 
-### 3.1 Dane
+### 3.1 Data
 
-`scripts/download_data.py` → `data/ingestion.py` → Parquet, jeden plik na
-(giełda, para, interwał): `data/binance_BTC-USDT_4h.parquet`.
+`scripts/download_data.py` → `data/ingestion.py` → Parquet, one file per (exchange, pair,
+interval): `data/binance_BTC-USDT_4h.parquet`.
 
-- Pobieranie jest **przyrostowe**: przy kolejnym uruchomieniu dociąga tylko to,
-  czego nie ma — od ostatniej zapisanej świecy w przód, a przy większym `--days`
-  także wstecz, przed najstarszą.
-- **Świeca wciąż otwarta jest odrzucana** (`df[df.timestamp < cutoff]`). To samo
-  odcięcie robi silnik przy starcie (`raw[:-1]`) i w feedzie. Świeca otwarta ma
-  ruchome `high`/`low`/`close` — sygnał z niej byłby sygnałem z przyszłości.
-- `storage.find_gaps` raportuje dziury w historii; interwał czyta z `TIMEFRAME_MS`.
+- Downloading is **incremental**: on a later run it fetches only what is missing — from
+  the last stored candle forwards, and with a larger `--days` also backwards, before the
+  oldest one.
+- **A candle still open is discarded** (`df[df.timestamp < cutoff]`). The engine makes the
+  same cut at startup (`raw[:-1]`) and in the feed. An open candle has moving
+  `high`/`low`/`close` — a signal from it would be a signal from the future.
+- `storage.find_gaps` reports holes in the history; it reads the interval from
+  `TIMEFRAME_MS`.
 
-### 3.2 Cechy (`features/engineering.py`)
+### 3.2 Features (`features/engineering.py`)
 
-26 kolumn (+ 4 opcjonalne z funding rate), wszystkie liczone wyłącznie z przeszłości
-— `rolling`, `ewm`, `shift`, nigdy `shift(-1)`. Cztery rodziny:
+26 columns (+4 optional ones from the funding rate), all computed strictly from the past
+— `rolling`, `ewm`, `shift`, never `shift(-1)`. Four families:
 
-- **zwroty i zmienność** — log-zwroty na 1/3/5/15/30/60 barach, odchylenia na 15 i 60
-  oraz ich stosunek (czy zmienność właśnie rośnie);
-- **klasyczne wskaźniki** — RSI 14, ATR znormalizowany ceną, EMA 9/21 i odległość od EMA 50;
-- **kształt świecy i wolumen** — `body_ratio`, zakres świecy, z-score wolumenu;
-- **kontekst reżimu** — `trend_42`/`trend_180`, `mom_42`/`mom_180`, `vol_regime`,
-  `dd_180` (jak daleko od 180-barowego szczytu). Na 4h to mniej więcej tydzień i miesiąc.
+- **returns and volatility** — log returns over 1/3/5/15/30/60 bars, standard deviations
+  over 15 and 60, and their ratio (is volatility rising right now);
+- **classic indicators** — RSI 14, ATR normalised by price, EMA 9/21 and the distance from
+  EMA 50;
+- **candle shape and volume** — `body_ratio`, the candle's range, a volume z-score;
+- **regime context** — `trend_42`/`trend_180`, `mom_42`/`mom_180`, `vol_regime`, `dd_180`
+  (how far below the 180-bar peak). At 4h that is roughly a week and a month.
 
-Gwarancja „wartość cechy w barze *t* nie zmienia się, gdy przyjdą kolejne bary" jest
-zapięta testem (`tests/test_features.py`), a nie tylko konwencją.
+The guarantee that "a feature's value at bar *t* does not change when later bars arrive"
+is pinned by a test (`tests/test_features.py`), not merely by convention.
 
-### 3.3 Etykiety: triple-barrier (`labeling/triple_barrier.py`)
+### 3.3 Labels: triple-barrier (`labeling/triple_barrier.py`)
 
-Etykieta nie brzmi „czy cena wzrosła", tylko **„czy wchodząc tutaj, trafiłbym w
-take-profit przed stop-lossem"**. Dla sygnału z zamknięcia bara *t*:
+The label is not "did the price rise" but **"entering here, would I have hit the
+take-profit before the stop-loss"**. For a signal from bar *t*'s close:
 
-- wejście po **otwarciu bara t+1** (nie po zamknięciu t — tego nie da się kupić),
-- bariery: `wejście ± mult × ATR(t)`,
-- skan barów t+1…t+H; etykieta 1 tylko wtedy, gdy TP zostało dotknięte **ściśle
-  wcześniej** niż SL,
-- **bar, który dotyka obu barier, liczy się jako SL**. Kolejności ruchów wewnątrz
-  bara nie znamy, więc zakładamy gorszy wariant. To samo założenie ma symulator
-  fillów, więc etykieta i egzekucja nie kłócą się o ten sam bar.
+- entry at **bar t+1's open** (not at t's close — you cannot buy that),
+- barriers: `entry ± mult × ATR(t)`,
+- scan bars t+1…t+H; the label is 1 only when the TP was touched **strictly earlier** than
+  the SL,
+- **a bar that touches both barriers counts as an SL**. We do not know the order of moves
+  inside a bar, so we assume the worse case. The fill simulator makes the same assumption,
+  so the label and the execution do not disagree about the same bar.
 
-Ostatnie `H+1` barów nie da się zaetykietować (nie mają pełnego horyzontu) —
-zostają jako NaN i wypadają z treningu.
+The last `H+1` bars cannot be labelled (they have no full horizon) — they stay NaN and
+drop out of training.
 
-### 3.4 Trening: walk-forward z purge (`models/train.py`)
+### 3.4 Training: walk-forward with a purge (`models/train.py`)
 
-Okna rozszerzające się: fold *i* uczy się na wszystkim od początku do
-`test_start − purge`, testuje na następnym kawałku. Kluczowy jest **purge gap** ≥
-horyzontu etykiety: bez niego etykieta z końcówki zbioru treningowego zagląda w bary,
-które są już w teście — i AUC wychodzi ładne z powodu wycieku, nie z powodu sygnału.
+Expanding windows: fold *i* learns on everything from the start to
+`test_start − purge`, and is tested on the following slice. The key part is the **purge
+gap** ≥ the label's horizon: without it a label from the end of the training set peeks
+into bars that are already in the test — and the AUC comes out pretty because of leakage,
+not because of signal.
 
-Model: LightGBM (`n_estimators=400`, `learning_rate=0.03`, `min_child_samples=200`).
-Bez `libomp` (typowe na macOS) kod sam schodzi na `HistGradientBoostingClassifier`
-ze sklearn — ten sam interfejs, brak natywnych zależności.
+The model: LightGBM (`n_estimators=400`, `learning_rate=0.03`,
+`min_child_samples=200`). Without `libomp` (common on macOS) the code steps down to
+scikit-learn's `HistGradientBoostingClassifier` by itself — the same interface, no native
+dependencies.
 
-`ModelBundle` zapisuje **własną listę kolumn cech** obok modelu. Backtest i silnik
-czytają listę z bundla, nie ze stałej w kodzie — inaczej dodanie cechy unieważniałoby
-po cichu każdy zapisany model.
+`ModelBundle` stores **its own feature-column list** alongside the model. The backtest and
+the engine read that list from the bundle rather than from a constant in the code —
+otherwise adding a feature would silently invalidate every saved model.
 
-### 3.5 Model kosztów (`execution/fills.py`)
+### 3.5 The cost model (`execution/fills.py`)
 
-Trzy funkcje i jedna decyzja: **taker płaci poślizg + prowizję, maker płaci prowizję
-po cenie limitu**. Domyślnie 0,1% prowizji i 2 bps poślizgu, z `config.yaml`.
+Three functions and one decision: **a taker pays slippage plus a fee, a maker pays a fee
+at the limit price**. By default 0.1% fees and 2 bps slippage, from `config.yaml`.
 
 ```
-buy_fill:  cena_efektywna = cena × (1 + poślizg),  prowizja = nominał × taker_fee
-sell_fill: cena_efektywna = cena × (1 − poślizg),  prowizja = nominał × taker_fee
+buy_fill:  effective_price = price × (1 + slippage),  fee = notional × taker_fee
+sell_fill: effective_price = price × (1 − slippage),  fee = notional × taker_fee
 ```
 
-`check_bracket_exit` odpowiada na pytanie „którą barierę dotyka ten bar" — i to jest
-funkcja, którą wołają **jednocześnie** backtester i silnik na żywo.
+`check_bracket_exit` answers "which barrier does this bar touch" — and it is the function
+called by **both** the backtester and the live engine.
 
-### 3.6 Silnik (`engine/loop.py`)
+### 3.6 The engine (`engine/loop.py`)
 
-Dwie warstwy, celowo rozdzielone:
+Two layers, deliberately separated:
 
-- **`Book`** — jedna księga (gotówka, pozycje, ryzyko, własny `RuntimeStore`).
-  W pełni synchroniczna: karmisz ją zamkniętymi świecami przez `on_candle` i
-  sprawdzasz stan. Dlatego da się ją przetestować bez sieci i bez asyncio.
-- **`TradingEngine`** — cienka warstwa async. Strumieniuje świece **raz** i rozsyła
-  każdą zamkniętą do wszystkich ksiąg. Cztery warianty A/B nie oznaczają czterech
-  razy więcej zapytań do giełdy.
+- **`Book`** — one book (cash, positions, risk, its own `RuntimeStore`). Fully
+  synchronous: you feed it closed candles through `on_candle` and inspect its state. That
+  is why it can be tested without network and without asyncio.
+- **`TradingEngine`** — a thin async layer. It streams candles **once** and distributes
+  each closed one to every book. Four A/B variants do not mean four times the requests to
+  the exchange.
 
-Co się dzieje na jednej zamkniętej świecy, w tej kolejności:
+What happens on one closed candle, in this order:
 
 ```
 on_candle(symbol, bar)
-  1. dopisz bar do bufora (ostatnie warmup + horizon + 50 barów)
-  2. _maybe_reload_models()   – czy refresher podmienił model?
-  3. _maybe_reload_config()   – czy panel zmienił parametry? (§8)
-  4. _manage_position()       – TP / SL / timeout na OTWARTEJ pozycji
-  5. _maybe_enter()           – dopiero teraz rozważ nowe wejście
-  6. dopisz wiersz do equity.jsonl
-  7. sprawdź alarmy (kill-switch, obsunięcie)
-  8. zapisz state.json (atomowo: tmp + os.replace)
+  1. append the bar to the buffer (last warmup + horizon + 50 bars)
+  2. _maybe_reload_models()   – has the refresher swapped the model?
+  3. _maybe_reload_config()   – has the panel changed parameters? (§8)
+  4. _manage_position()       – TP / SL / timeout on an OPEN position
+  5. _maybe_enter()           – only now consider a new entry
+  6. append a row to equity.jsonl
+  7. check the alarms (kill-switch, drawdown)
+  8. write state.json (atomically: tmp + os.replace)
 ```
 
-Kolejność 4 → 5 nie jest przypadkowa: pozycja musi mieć szansę się zamknąć, zanim
-limit „max otwartych pozycji" zablokuje cokolwiek innego.
+The order 4 → 5 is not accidental: a position must get its chance to close before the
+"max open positions" limit blocks anything else.
 
-**Wejście** wymaga przejścia przez cztery bramki: nie ma już pozycji na tym symbolu,
-bufor przekroczył `warmup_bars`, `RiskManager.can_open` przepuszcza, i model daje
-prawdopodobieństwo ≥ `prob_threshold`. Każde „nie" ląduje w `signals[symbol]` z
-powodem (`warmup`, `risk_blocked`, `below_threshold`, `in_position`, `features_nan`,
-`no_atr`) — to jest źródło zakładki „Model: dlaczego nie handluje".
+**An entry** must pass four gates: there is no position on this symbol already, the buffer
+exceeds `warmup_bars`, `RiskManager.can_open` allows it, and the model gives a probability
+≥ `prob_threshold`. Every "no" lands in `signals[symbol]` with a reason (`warmup`,
+`risk_blocked`, `below_threshold`, `in_position`, `features_nan`, `no_atr`) — that is the
+source of the "Model: why it is not trading" tab.
 
-**Wyjście**: TP, SL albo timeout po `horizon_bars`. Timeout ma wyjątek
-(`_maybe_rollover`, flaga `strategy.rollover`): jeśli deadline mija, a sygnał wciąż
-jest powyżej progu, pozycja zostaje **przedłużona** — nowe TP/SL od bieżącego ATR,
-nowy deadline — zamiast zostać zamknięta i natychmiast otwarta na tej samej świecy za
-podwójną prowizję i poślizg. Decyduje jawny rachunek, nie sam typ wyjścia:
+**An exit**: TP, SL or a timeout after `horizon_bars`. The timeout has an exception
+(`_maybe_rollover`, the `strategy.rollover` flag): if the deadline passes while the signal
+is still above the threshold, the position is **extended** — new TP/SL from the current
+ATR, a new deadline — instead of being closed and immediately reopened on the same candle
+for double the fee and slippage. An explicit calculation decides, not the exit type alone:
 
 ```
-edge = kierunek × (cena_wyjścia − cena_zamknięcia_świecy)   ile warte jest wyjście tutaj
-przedłuż  ⟺  edge ≤ koszt rundy (2 × prowizja + 2 × poślizg)
+edge = direction × (exit_price − candle_close)      what exiting here is worth
+extend  ⟺  edge ≤ round-trip cost (2 × fee + 2 × slippage)
 ```
 
-Przy timeoucie obie ceny to zamknięcie tej samej świecy, więc `edge` = 0 i warunek jest
-spełniony zawsze. **Take-profit mimo to nie kwalifikuje się nigdy** — i to jest
-najciekawszy wynik w tym module. Rozszerzenie przedłużania na TP wyglądało w backteście
-rewelacyjnie (średni wynik +146,6% → **+182,8%** na 5,5 roku i dziesięciu parach, każda
-para na plusie), ale TP wykrywamy z maksimum świecy: to dotknięcie **wewnątrz** świecy,
-rozliczane po cenie bariery, czyli transakcja, która zaszła, zanim świeca się domknęła.
-Rezygnacja z niej po zobaczeniu, gdzie świeca zamknęła, jest czytaniem z przyszłości —
-i punktuje jak czytanie z przyszłości. Uczciwa wersja, ograniczona do timeoutu, daje
-+146,56% → +146,67% i 18 USDT mniej prowizji. Trzysta razy mniej, i tyle jest prawdą.
+At a timeout both prices are the same candle's close, so `edge` = 0 and the condition
+always holds. **A take-profit nevertheless never qualifies** — and that is the most
+interesting result in this module. Extending rollover to TP exits looked spectacular in
+the backtest (average result +146.6% → **+182.8%** over 5.5 years and ten pairs, every
+pair in the black), but a TP is detected from the candle's high: a touch **inside** the
+candle, settled at the barrier price, i.e. a trade that happened before the candle closed.
+Declining it after seeing where the candle closed is reading from the future — and it
+scores like reading from the future. The honest version, limited to timeouts, gives
++146.56% → +146.67% and 18 USDT less in fees. Three hundred times smaller, and that is
+how much of it was true.
 
-Stop-loss nie przedłuża nigdy: to porzucenie limitu ryzyka, nie oszczędność na
-prowizji. Na dniu z aktywnym kill-switchem rollover też nie działa — bo ponowne
-wejście, które zastępuje, też byłoby zablokowane.
+A stop-loss never extends: that is abandoning a risk limit, not saving on a fee. On a day
+with an active kill-switch rollover is disabled too — because the re-entry it replaces
+would also have been blocked.
 
-### 3.7 Ryzyko (`risk/manager.py`)
+### 3.7 Risk (`risk/manager.py`)
 
-Trzy proste reguły, świadomie bez finezji:
+Three simple rules, deliberately without finesse:
 
-- **wielkość pozycji** = `position_pct` × bieżący kapitał (nie początkowy — sizing
-  sam się kurczy po stratach);
-- **sufit ekspozycji** = `max_open_positions`. Pary krypto są mocno skorelowane, więc
-  otwarte pozycje i tak zwykle idą w tę samą stronę; 5 × 10% = 50% konta w rynku.
-  Sufit nie jest ustawieniem komfortu: na osiemnastu parach to **najsilniejszy
-  zmierzony efekt w tym projekcie** — limit 3 bije limit 10 o +4,5 pp na okno,
-  w 8 oknach na 10 (t = +2,7 do +3,5). Szeroka plansza płaci jako **pula do
-  wybierania**, nie jako lista do zapełnienia (§7.1);
-- **kill-switch dzienny**: po stracie zrealizowanej ≥ `daily_loss_limit_pct` startowego
-  kapitału dnia — koniec nowych wejść do końca doby UTC. Istniejące pozycje dalej się
-  domykają. Dzień jest częścią stanu (`snapshot`/`restore`), więc restart kontenera nie
-  kasuje limitu.
+- **position size** = `position_pct` × current equity (not the initial capital — the
+  sizing shrinks itself after losses);
+- **exposure ceiling** = `max_open_positions`. Crypto pairs are heavily correlated, so
+  open positions usually move the same way anyway; 5 × 10% = 50% of the account in the
+  market. The ceiling is not a comfort setting: on eighteen pairs it is the **strongest
+  effect measured in this project** — a cap of 3 beats a cap of 10 by +4.5 pp per window,
+  in 8 windows of 10 (t = +2.7 to +3.5). A wide board pays as a **pool to choose from**,
+  not as a list to fill (§7.1);
+- **a daily kill-switch**: after a realised loss ≥ `daily_loss_limit_pct` of the day's
+  starting capital — no new entries for the rest of the UTC day. Existing positions still
+  close. The day is part of the state (`snapshot`/`restore`), so a container restart does
+  not clear the limit.
 
-### 3.8 Feed i awarie sieci
+### 3.8 The feed and network failures
 
-WebSocket (`ccxt.pro`) z **automatycznym zejściem na REST polling**, gdy się wywali.
-Świeca jest rozsyłana dopiero, gdy zobaczymy jej następczynię — to jest definicja
-„zamknięta".
+A WebSocket (`ccxt.pro`) with an **automatic fallback to REST polling** when it breaks. A
+candle is distributed only once we see its successor — that is the definition of "closed".
 
-Osobna pętla `_ticker_loop` co 60 s odświeża wyceny do panelu przez `mark_to_market` —
-i **nigdy nie handluje**. Panel pokazuje żywe „ile masz", chociaż decyzje zapadają raz
-na 4 godziny.
+A separate `_ticker_loop`, every 60 s, refreshes valuations for the panel through
+`mark_to_market` — and **never trades**. The panel shows a live "what you have" even
+though decisions are made once every 4 hours.
 
-Trzy rzeczy tu wyglądają na nadmiarowe, a nie są (każda ma swój wpis w CHANGELOG):
+Three things here look redundant and are not (each has its own changelog entry):
 
-- **Retry z backoffem przy starcie.** Bez tego proces umierał na `fetch_ohlcv`, a
-  `restart: unless-stopped` wracał w tę samą awarię — 826 restartów przez pięć godzin.
-  Teraz: 5 s → 10 s → … → 300 s, w nieskończoność, bo bot na 4h nic nie traci przez
-  czekanie.
-- **Alarm o połączeniu jest zamykany.** `connection` z `ok=False` to stan, nie zdarzenie
-  — więc po powrocie sieci dopisywana jest para z `ok=True`. Bezwarunkowo przy każdym
-  starcie, bo wisząca awaria zwykle należy do **poprzedniego** kontenera.
-- **Log nie jest zalewany.** Traceback leci raz, potem tylko `WARNING` z licznikiem.
-  Synology nie rotuje logów kontenerów.
+- **Retry with backoff at startup.** Without it the process died on `fetch_ohlcv` and
+  `restart: unless-stopped` came back into the same failure — 826 restarts over five
+  hours. Now: 5 s → 10 s → … → 300 s, indefinitely, because a 4h bot loses nothing by
+  waiting.
+- **The connection alarm gets closed.** A `connection` with `ok=False` is a state, not an
+  event — so once the network returns, its pair with `ok=True` is appended.
+  Unconditionally at every startup, because a hanging failure usually belongs to the
+  **previous** container.
+- **The log is not flooded.** The traceback goes out once, then only a `WARNING` with a
+  counter. Synology does not rotate container logs.
 
-### 3.9 Co zostaje na dysku
+### 3.9 What stays on disk
 
-Na wariant, w `runtime/<nazwa>/`:
+Per variant, in `runtime/<name>/`:
 
-| Plik | Co zawiera | Kto go czyta |
+| File | Contents | Who reads it |
 |---|---|---|
-| `state.json` | migawka: gotówka, pozycje, ostatnie ceny, sygnały per symbol, stan ryzyka, `live_config` | panel (zapis atomowy, więc nigdy nie złapie połowy) |
-| `trades.jsonl` | **zamknięte** transakcje (wejście, wyjście, powód, prowizje, PnL) | panel: dziennik, analityka |
-| `equity.jsonl` | jeden wiersz na przetworzoną świecę: kapitał i gotówka | panel: krzywa kapitału, ekspozycja |
-| `alerts.jsonl` | zdarzenia: otwarcie, zamknięcie, rollover, kill-switch, obsunięcie, połączenie, zmiana configu | panel: oś czasu |
+| `state.json` | a snapshot: cash, positions, last prices, per-symbol signals, risk state, `live_config` | the panel (written atomically, so it never catches half of it) |
+| `trades.jsonl` | **closed** trades (entry, exit, reason, fees, PnL) | the panel: log, analytics |
+| `equity.jsonl` | one row per processed candle: equity and cash | the panel: the equity curve, exposure |
+| `alerts.jsonl` | events: open, close, rollover, kill-switch, drawdown, connection, config change | the panel: the timeline |
 
-JSONL, nie baza — świadomie. Zachowuje `tail -f` na żywym bocie, `jq`, czytelny
-`git diff`, a uszkodzony zapis kosztuje jeden wiersz, nie plik.
+JSONL, not a database — deliberately. It keeps `tail -f` working on a live bot, `jq`, a
+readable `git diff`, and a corrupted write costs one row rather than the file.
 
-Uwaga na pułapkę, którą ten format kiedyś tu zastawił: `trades.jsonl` dostaje wiersz
-dopiero przy **zamknięciu** pozycji, więc sam dziennik transakcji nie wie nic o tym,
-co bot trzyma teraz. Otwarte pozycje są w `state.json` i panel musi czytać oba źródła.
+Beware a trap this format once set here: `trades.jsonl` gets a row only when a position
+**closes**, so the trade journal alone knows nothing about what the bot is holding now.
+Open positions live in `state.json`, and the panel has to read both sources.
 
 ---
 
-## 4. Mechanika gry: co bot robi przy stole
+## 4. The mechanics of the game: what the bot does at the table
 
-Sekcja 3 opisuje, z czego bot jest zbudowany. Ta opisuje, w co on właściwie **gra** —
-jakie ma zasady, co robi w typowej turze i co się dzieje w przypadkach brzegowych.
+Section 3 describes what the bot is built from. This one describes what it actually
+**plays** — what its rules are, what it does in a typical turn, and what happens at the
+edges.
 
-### 4.1 Zasady gry
+### 4.1 The rules of the game
 
 | | |
 |---|---|
-| **Plansza** | 18 par USDT, każda niezależnie |
-| **Tura** | zamknięcie świecy 4h — 6 tur na dobę na parę, 108 decyzji dziennie łącznie |
-| **Ręka** | maksymalnie 5 otwartych pozycji jednocześnie, po 10% kapitału każda |
-| **Limit stołu** | 1 pozycja na parę — nie ma dokładania ani uśredniania |
-| **Kierunek** | domyślnie tylko long; `direction: long_short` włącza drugi model |
-| **Koniec tury** | take-profit, stop-loss, timeout po 12 barach (2 dni) albo przedłużenie |
-| **Wykluczenie z gry** | strata zrealizowana ≥ 3% kapitału z początku doby — do końca doby UTC |
-| **Stawka** | wirtualna, dopóki `mode: paper` |
+| **The board** | 18 USDT pairs, each independently |
+| **A turn** | a 4h candle's close — 6 turns a day per pair, 108 decisions a day in total |
+| **A hand** | at most 5 open positions at once, 10% of capital each |
+| **Table limit** | 1 position per pair — no adding, no averaging down |
+| **Direction** | long only by default; `direction: long_short` enables a second model |
+| **End of turn** | take-profit, stop-loss, a timeout after 12 bars (2 days), or an extension |
+| **Sent off** | a realised loss ≥ 3% of the day's opening capital — until the UTC day ends |
+| **The stake** | virtual, as long as `mode: paper` |
 
-Bot nie ma dźwigni, nie ma trailing stopu, nie skaluje wejść i nie przenosi stopa na
-poziom wejścia. Każda pozycja to **jeden zakład o ustalonej z góry wypłacie i ustalonym
-z góry terminie**. To jest świadomy wybór: przy przewadze bliskiej zeru każdy dodatkowy
-mechanizm dokłada tylko parametr do dopasowania.
+The bot has no leverage, no trailing stop, does not scale into entries and does not move a
+stop to break-even. Every position is **one bet with a payout and a deadline fixed in
+advance**. That is a deliberate choice: with an edge near zero, every additional mechanism
+only adds a parameter to fit.
 
-### 4.2 Życie jednej pozycji, z liczbami
+### 4.2 The life of one position, with numbers
 
-Kapitał 1000 USDT, ETH po 2000, ATR(14) = 40 USDT (2% ceny), model daje `p_long` = 0,58
-przy progu 0,55.
-
-```
-1. WIELKOŚĆ      1000 × 10%  = 100 USDT  →  100 / 2000 = 0,05 ETH
-2. WEJŚCIE       poślizg 2 bps: 2000 × 1,0002 = 2000,40
-                 prowizja 0,1%: 0,10 USDT      →  z gotówki schodzi 100,12
-3. BARIERY       TP = 2000,40 + 1,5 × 40 = 2060,40   (+3,0%)
-                 SL = 2000,40 − 2,0 × 40 = 1920,40   (−4,0%)
-                 deadline = teraz + 12 × 4h = 48 godzin
-4. CZEKANIE      co świecę: czy high ≥ TP? czy low ≤ SL? czy minął deadline?
-                 świeca dotykająca OBU barier liczy się jako SL
-5. WYJŚCIE (TP)  sprzedaż po 2060,40 × 0,9998 = 2059,99, prowizja 0,10
-                 PnL = 0,05 × (2059,99 − 2000,40) − 0,10 − 0,10 ≈ +2,78 USDT
-```
-
-Runda kosztuje **0,24% nominału** (2 × prowizja 0,1% + 2 × poślizg 0,02%), czyli
-tu ~0,24 USDT. Dlatego raport backtestu drukuje `median_tp_pct` obok
-`round_trip_cost_pct`: jeśli mediana odległości do TP nie przekracza kosztu rundy
-z zapasem, strategia nie ma z czego żyć — i dokładnie to unieważniło pomysł grania
-na świecach 1-minutowych.
-
-Pozycja idzie do `state.json` natychmiast. Do `trades.jsonl` trafia dopiero w kroku 5 —
-przy zamknięciu (§3.9).
-
-### 4.3 Arytmetyka barier: dlaczego próg jest tam, gdzie jest
-
-TP = 1,5 ATR, SL = 2,0 ATR. Bot **ryzykuje więcej, niż celuje** — więc sama wygrana
-częściej niż przegrana nie wystarcza:
+Capital 1000 USDT, ETH at 2000, ATR(14) = 40 USDT (2% of the price), the model gives
+`p_long` = 0.58 against a threshold of 0.55.
 
 ```
-próg opłacalności = SL / (TP + SL) = 2,0 / 3,5 ≈ 57% trafień
+1. SIZE          1000 × 10%  = 100 USDT  →  100 / 2000 = 0.05 ETH
+2. ENTRY         2 bps slippage: 2000 × 1.0002 = 2000.40
+                 0.1% fee: 0.10 USDT           →  100.12 leaves the cash
+3. BARRIERS      TP = 2000.40 + 1.5 × 40 = 2060.40   (+3.0%)
+                 SL = 2000.40 − 2.0 × 40 = 1920.40   (−4.0%)
+                 deadline = now + 12 × 4h = 48 hours
+4. WAITING       each candle: is high ≥ TP? is low ≤ SL? has the deadline passed?
+                 a candle touching BOTH barriers counts as an SL
+5. EXIT (TP)     sell at 2060.40 × 0.9998 = 2059.99, fee 0.10
+                 PnL = 0.05 × (2059.99 − 2000.40) − 0.10 − 0.10 ≈ +2.78 USDT
 ```
 
-To nie jest przypadek, że model jest uczony dokładnie na tym zdarzeniu: etykieta
-triple-barrier (§3.3) brzmi „TP przed SL" przy tych samych mnożnikach, więc
-`prob_threshold` porównuje się bezpośrednio z tym progiem. Domyślne 0,55 leży
-**poniżej** 57% — bot świadomie wpuszcza zakłady z lekko ujemną wartością oczekiwaną
-z samych barier, w zamian za częstsze granie.
+A round trip costs **0.24% of the notional** (2 × 0.1% fee + 2 × 0.02% slippage), so about
+0.24 USDT here. That is why the backtest report prints `median_tp_pct` next to
+`round_trip_cost_pct`: if the median distance to the TP does not clear the round-trip cost
+with room to spare, the strategy has nothing to live on — and that is exactly what
+invalidated the idea of trading 1-minute candles.
 
-Dwa zastrzeżenia, żeby ten rachunek nie brzmiał ostrzej niż jest: dotyczy tylko wyjść
-przez bariery (timeout wychodzi po cenie zamknięcia, gdziekolwiek ona jest), i zakłada
-skalibrowany model. Ale wyjaśnia, czemu `prob_threshold` to najczęściej ruszany
-parametr w panelu, i czemu jeden z wariantów A/B testuje 0,65.
+The position goes into `state.json` immediately. It reaches `trades.jsonl` only at step 5
+— at the close (§3.9).
 
-### 4.4 Co bot robi przez większość czasu: nic
+### 4.3 Barrier arithmetic: why the threshold sits where it sits
 
-To jest najważniejsza część mechaniki i najłatwiejsza do przeoczenia. W backteście
-pozycja jest otwarta na **6–11% świec na parę**. Przez pozostałe ~90% czasu tura
-kończy się wpisem w `signals[symbol]` i niczym więcej.
+TP = 1.5 ATR, SL = 2.0 ATR. The bot **risks more than it aims for** — so winning more
+often than losing is not on its own enough:
 
-Ranking powodów, od najczęstszego:
+```
+break-even = SL / (TP + SL) = 2.0 / 3.5 ≈ 57% hit rate
+```
 
-| Powód | Co znaczy |
+It is no coincidence that the model is trained on precisely this event: the triple-barrier
+label (§3.3) says "TP before SL" at the same multipliers, so `prob_threshold` compares
+directly against that break-even. The default of 0.55 sits **below** 57% — the bot
+knowingly admits bets with a slightly negative expected value from the barriers alone, in
+exchange for playing more often.
+
+Two caveats, so this arithmetic does not sound harsher than it is: it applies only to
+exits through the barriers (a timeout exits at the close price, wherever that is), and it
+assumes a calibrated model. But it explains why `prob_threshold` is the most frequently
+adjusted parameter in the panel, and why one of the A/B variants tests 0.65.
+
+### 4.4 What the bot does most of the time: nothing
+
+This is the most important part of the mechanics and the easiest to overlook. In a
+backtest a position is open on **6–11% of candles per pair**. For the other ~90% of the
+time a turn ends with an entry in `signals[symbol]` and nothing else.
+
+The reasons ranked, most frequent first:
+
+| Reason | What it means |
 |---|---|
-| `below_threshold` | model policzył prawdopodobieństwo, wyszło za mało — **stan normalny** |
-| `in_position` | ta para jest już zajęta |
-| `risk_blocked` | para **chciała wejść**, ale sloty zajęte albo kill-switch |
-| `warmup` | bufor krótszy niż 300 barów (po świeżym starcie bez historii) |
-| `features_nan` / `no_atr` | dziura w danych albo świeca bez zakresu |
+| `below_threshold` | the model computed a probability and it came out too low — **the normal state** |
+| `in_position` | this pair is already occupied |
+| `risk_blocked` | the pair **wanted to enter**, but the slots are taken or the kill-switch is on |
+| `warmup` | the buffer is shorter than 300 bars (after a fresh start with no history) |
+| `features_nan` / `no_atr` | a hole in the data, or a candle with no range |
 
-Kolejność w silniku ma tu znaczenie i była kiedyś odwrotna. `_maybe_enter` pyta model
-**przed** sprawdzeniem limitu, choć policzenie predykcji kosztuje więcej niż zajrzenie
-do licznika pozycji. Powód jest diagnostyczny: przy starej kolejności zablokowana para
-nie miała jeszcze policzonego prawdopodobieństwa, więc panel pokazywał „wstrzymany
-limitem ryzyka" obok **pustej** kolumny `p(long)` — a to mogło równie dobrze znaczyć
-odrzuconą okazję 0,92, jak i niewypał 0,31. Do tego powód kłamał: przy pełnej książce
-pod `risk_blocked` lądowały też pary daleko poniżej progu, które i tak by nie weszły.
-Teraz `risk_blocked` to zawsze **realnie odrzucona okazja**, z liczbą obok.
+The order inside the engine matters here, and it used to be the other way round.
+`_maybe_enter` asks the model **before** checking the limit, even though computing a
+prediction costs more than glancing at a position counter. The reason is diagnostic: under
+the old order a blocked pair had no probability computed yet, so the panel showed "held
+back by the risk limit" next to an **empty** `p(long)` column — which could equally mean a
+rejected 0.92 opportunity or a 0.31 non-event. On top of that the reason was lying: with a
+full book, pairs far below the threshold, which would not have entered anyway, also landed
+under `risk_blocked`. Now `risk_blocked` is always a **genuinely rejected opportunity**,
+with the number beside it.
 
-Panel czyta to jeden do jednego w zakładce „Model: dlaczego nie handluje". Nuda
-w dzienniku zdarzeń nie jest awarią — to jest domyślny tryb pracy tej strategii.
-Skutek uboczny: **~70–80% konta stoi w gotówce**, i to właśnie ten fakt wymusza dwa
-benchmarki w panelu zamiast jednego (§7).
+The panel reads this one-to-one in the "Model: why it is not trading" tab. Boredom in the
+event log is not a fault — it is this strategy's default operating mode. A side effect:
+**~70–80% of the account sits in cash**, and that fact is what forces two benchmarks in
+the panel rather than one (§7).
 
-### 4.5 Dzień, w którym bot przegrywa
+### 4.5 The day the bot loses
 
-Kill-switch liczy tylko **stratę zrealizowaną** od początku doby UTC, licząc od
-kapitału z jej początku. Po przekroczeniu 3%:
+The kill-switch counts only the **realised loss** since the start of the UTC day, measured
+against the capital at its start. Once 3% is exceeded:
 
-- nowe wejścia są zablokowane na wszystkich parach do północy UTC (`can_open` zwraca
+- new entries are blocked on every pair until UTC midnight (`can_open` returns
   `risk_blocked`);
-- otwarte pozycje **dalej żyją** — TP, SL i timeout działają normalnie, bo zamykanie
-  jest wyjściem z ryzyka, nie wchodzeniem w nie;
-- przedłużenie pozycji (rollover) jest wyłączone, bo zastępuje wejście, które i tak
-  byłoby zablokowane;
-- do `alerts.jsonl` idzie jeden alarm `kill_switch`, nie jeden na świecę.
+- open positions **carry on living** — TP, SL and the timeout work normally, because
+  closing is exiting risk, not entering it;
+- extending a position (rollover) is disabled, because it replaces an entry that would
+  have been blocked anyway;
+- one `kill_switch` alarm goes to `alerts.jsonl`, not one per candle.
 
-Dzień jest częścią stanu księgi, więc restart kontenera w środku złego dnia **nie
-kasuje limitu** — `RiskManager.restore` odczytuje datę, kapitał początkowy doby
-i zrealizowany wynik.
+The day is part of the book's state, so a container restart in the middle of a bad day
+**does not clear the limit** — `RiskManager.restore` reads back the date, the day's
+opening capital and the realised result.
 
-Osobno działa alarm obsunięcia: przy spadku o `drawdown_alert_pct` od szczytu leci
-jedno powiadomienie, a próg odwieszenia jest o połowę niższy niż próg alarmu —
-histereza, żeby księga drgająca wokół granicy nie wysyłała alarmu co świecę.
+A drawdown alarm works separately: on a fall of `drawdown_alert_pct` from the peak one
+notification goes out, and the threshold for re-arming it is half the alarm threshold —
+hysteresis, so a book oscillating around the boundary does not send an alarm every candle.
 
-Oba te bezpieczniki pilnują dnia, w którym rynek jest zły. Nie pilnują dnia, w którym
-**ustawienia** są złe: podniesiony sufit ekspozycji nie jest stratą, dopóki pozycje nie
-zaczną spadać, więc nic go nie zatrzyma. Za to §4.8.
+Both of these safety catches watch for the day the market is bad. They do not watch for
+the day the **settings** are bad: a raised exposure ceiling is not a loss until the
+positions start falling, so nothing stops it. See §4.8 for that.
 
-### 4.6 Rytm doby: co się dzieje między świecami
+### 4.6 The rhythm of a day: what happens between candles
 
-Silnik nie stoi bezczynnie między decyzjami. Cztery pętle chodzą równolegle,
-z bardzo różnymi zegarami:
+The engine does not sit idle between decisions. Four loops run in parallel, on very
+different clocks:
 
 ```
-co 5 s     REST polling (fallback, gdy WebSocket padł) — szuka nowej zamkniętej świecy
-co 10 s    _restart_watcher — czy panel poprosił o restart?
-co 60 s    _ticker_loop — świeże ceny → mark_to_market → state.json.  NIE HANDLUJE
-co 4 h     zamknięcie świecy → on_candle → jedyny moment, w którym powstaje zlecenie
+every 5 s     REST polling (the fallback when the WebSocket dies) — looks for a new closed candle
+every 10 s    _restart_watcher — has the panel asked for a restart?
+every 60 s    _ticker_loop — fresh prices → mark_to_market → state.json.  IT DOES NOT TRADE
+every 4 h     a candle closes → on_candle → the only moment an order can be created
 ```
 
-Stąd bierze się pozorna sprzeczność w panelu: „ile masz" zmienia się co minutę,
-a transakcje pojawiają się kilka razy na tydzień. Wycena jest ciągła, decyzja jest
-dyskretna.
+Hence the apparent contradiction in the panel: "what you have" changes every minute while
+trades appear a few times a week. The valuation is continuous; the decision is discrete.
 
-Przy zerwanej sieci rytm się rozjeżdża świadomie: każda pętla ma własny backoff
-(5 s → 10 s → … → 300 s), po trzeciej nieudanej próbie startu do dzienników idzie
-alarm `connection` z `ok=False`, a po powrocie — para z `ok=True` (§3.8).
+With the network down the rhythm diverges deliberately: each loop has its own backoff
+(5 s → 10 s → … → 300 s), after the third failed startup attempt a `connection` alarm with
+`ok=False` goes to the journals, and on recovery its pair with `ok=True` (§3.8).
 
-### 4.7 Cztery księgi grają tę samą rozdaną kartę
+### 4.7 Four books playing the same dealt hand
 
-`variants:` w konfiguracji to nie cztery boty. To **jeden strumień świec i cztery
-niezależne portfele**, które dostają dokładnie te same dane w tej samej chwili:
+`variants:` in the configuration is not four bots. It is **one stream of candles and four
+independent portfolios** receiving exactly the same data at exactly the same moment:
 
-| Księga | Próg | Sizing | Sufit ekspozycji |
+| Book | Threshold | Sizing | Exposure ceiling |
 |---|---|---|---|
-| `prog_050` (główna) | 0,50 | 5 × 10% | 50% |
-| `prog_055` | 0,55 | 5 × 10% | 50% |
-| `prog_065` | 0,65 | 5 × 10% | 50% |
-| `ryzyko_100` | 0,50 | 5 × 20% | **100%** |
+| `prog_050` (primary) | 0.50 | 5 × 10% | 50% |
+| `prog_055` | 0.55 | 5 × 10% | 50% |
+| `prog_060` | 0.60 | 5 × 10% | 50% |
+| `prog_065` | 0.65 | 5 × 10% | 50% |
+| `ryzyko_100` | 0.50 | 5 × 20% | **100%** |
 
-Trzy pierwsze różnią się wyłącznie progiem, więc różnica w ich krzywych kapitału jest
-różnicą progu i niczego więcej. Czwarta ma **identyczny sygnał co `prog_050`** —
-zmienia się tylko apetyt. To jest eksperyment z z góry postawioną tezą: na zmierzonych
-zwrotach dziennych optymalna frakcja Kelly'ego wychodzi ~0,47, więc 100% ekspozycji
-jest mniej więcej dwa razy za daleko, gdzie kara za wariancję (rośnie z kwadratem)
-przegania zysk (rośnie liniowo). `primary_variant` przypina `prog_050` do ekranu
-głównego, żeby ta księga nigdy nie trafiła na niego jako „Twój portfel".
+The threshold books differ in the threshold alone, so the difference between their equity
+curves is a difference of threshold and nothing else. The last one has an **identical
+signal to `prog_050`** — only the appetite changes. That is an experiment with its thesis
+stated in advance: on the measured daily returns the Kelly-optimal fraction comes out at
+~0.47, so 100% exposure is roughly twice too far, where the variance penalty (growing with
+the square) overtakes the return (growing linearly). `primary_variant` pins `prog_050` to
+the main screen, so that book can never appear there as "your portfolio".
 
-Każda księga ma własny katalog w `runtime/`, własną gotówkę i własny kill-switch.
-Wspólne mają: świece, model i egzekutora.
+Every book has its own directory under `runtime/`, its own cash and its own kill-switch.
+What they share: the candles, the model and the executor.
 
-### 4.8 Epizod 9–10.08.2026: ile kosztuje jedno kliknięcie w limit
+### 4.8 The 9–10 Aug 2026 episode: what one click on the limit costs
 
-Sufit pozycji jest w tym projekcie **najsilniejszym zmierzonym efektem** (§7.1: limit 3
-bije limit 10 o +4,5 pp na okno, 8 okien z 10, t = +2,7 — jedyny wynik, który
-przekracza zwykłą poprzeczkę istotności). Ten epizod jest tego potwierdzeniem na żywo,
-zapisanym tutaj, bo pokazuje coś, czego backtest nie pokaże: **jak ta zmiana wchodzi
-w czasie**.
+The position ceiling is **the strongest effect measured in this project** (§7.1: a cap of
+3 beats a cap of 10 by +4.5 pp per window, 8 windows of 10, t = +2.7 — the only result
+that clears the usual significance bar). This episode is a live confirmation of it,
+recorded here because it shows something a backtest will not: **how that change arrives
+in time**.
 
-Oś czasu księgi `prog_050` (wszystko UTC, z `runtime/config_history.jsonl` i dzienników):
+The timeline of the `prog_050` book (all UTC, from `runtime/config_history.jsonl` and the
+journals):
 
-| Kiedy | Co | Ekspozycja |
+| When | What | Exposure |
 |---|---|---|
-| 09.08 12:00 | szczyt kapitału: 1019,95 USDT | 50% |
-| 09.08 17:51 | z panelu: `max_open_positions` 5 → 10 | 50% |
-| 09.08 20:00 | pierwsza świeca po zmianie: **cztery nowe pozycje** (ETH p=0,62, ADA 0,59, XRP 0,57, DOGE 0,58) | **90%** |
-| 09.08 22:43 | z panelu: `max_open_positions` 10 → 5 | 90% |
-| 10.08 04:00 → 16:00 | trzy z tych czterech wychodzą po bezpieczniku, czwarta wisi | 50% |
-| 10.08 17:39 | kapitał 1006,16 USDT | 50% |
+| 09.08 12:00 | equity peak: 1019.95 USDT | 50% |
+| 09.08 17:51 | from the panel: `max_open_positions` 5 → 10 | 50% |
+| 09.08 20:00 | the first candle after the change: **four new positions** (ETH p=0.62, ADA 0.59, XRP 0.57, DOGE 0.58) | **90%** |
+| 09.08 22:43 | from the panel: `max_open_positions` 10 → 5 | 90% |
+| 10.08 04:00 → 16:00 | three of those four exit on the stop, the fourth hangs on | 50% |
+| 10.08 17:39 | equity 1006.16 USDT | 50% |
 
-**Rozbicie spadku.** Od szczytu do końca doby 10.08:
+**Breaking the fall down.** From the peak to the end of 10 Aug:
 
-- koszyk równoważny handlowanych par: **−1,60%** (ETH −2,57%, LTC −2,60%, BTC −1,42%) —
-  to jest rynek i on dał kierunek;
-- uczciwa poprzeczka (`matched_exposure_curve`, §7): **−1,04%**, księga: **−1,30%**;
-- cztery pozycje otwarte na świecy 20:00: **−7,07 USDT**, czyli **51% całego
-  obsunięcia**. Bez nich księga skończyłaby na 1013,23 zamiast 1006,16, a obsunięcie
-  wyniosłoby −0,66% zamiast −1,35%.
+- an equal-weight basket of the traded pairs: **−1.60%** (ETH −2.57%, LTC −2.60%, BTC
+  −1.42%) — that is the market, and it set the direction;
+- the fair bar (`matched_exposure_curve`, §7): **−1.04%**; the book: **−1.30%**;
+- the four positions opened on the 20:00 candle: **−7.07 USDT**, i.e. **51% of the whole
+  drawdown**. Without them the book would have ended at 1013.23 instead of 1006.16, and
+  the drawdown would have been −0.66% instead of −1.35%.
 
-**Kontrola, która oddziela rynek od ustawień.** `prog_065` (za mało sygnałów, żeby
-skorzystać z wolnych miejsc) i `ryzyko_100` (nie miało gotówki na więcej) nie dobrały
-przy podniesionym limicie ani jednej pozycji — i spadły **−0,90%** i **−1,34%**.
-Tyle właśnie było rynkiem; reszta u `prog_050` i `prog_055` (tam analogiczne cztery
-pozycje kosztowały −6,59 USDT) była ekspozycją.
+**The control that separates the market from the settings.** `prog_065` (too few signals
+to make use of the free slots) and `ryzyko_100` (no cash for more) took not one position
+under the raised limit — and they fell **−0.90%** and **−1.34%**. That much was the
+market; the rest, for `prog_050` and `prog_055` (where an analogous four positions cost
+−6.59 USDT), was exposure.
 
-**Wniosek, który poszedł do panelu.** Strata nie wzięła się z tego, że model przestał
-działać — bot przegrał z biernym trzymaniem tego samego rynku przy tej samej
-ekspozycji o 0,26 pp, resztę zrobił kierunek rynku pomnożony przez ekspozycję. Wzięła
-się z tego, że przez pięć godzin ekspozycja była prawie dwa razy większa, niż zwykle,
-i trafiła dokładnie w zjazd. Kliknięcie, które to zrobiło, nie mówiło ani ile par
-czeka w kolejce na nowe miejsca, ani — co ważniejsze — że **cofnięcie limitu niczego
-nie zamyka**: zmiana w górę wchodzi przy najbliższej świecy, zmiana w dół dopiero
-wtedy, gdy nadmiarowe pozycje same się zamkną. Od 0.1.13 ekran ustawień pokazuje jedno
-i drugie (§8.1).
+**The conclusion that went into the panel.** The loss did not come from the model
+ceasing to work — the bot lost to passively holding the same market at the same exposure
+by 0.26 pp, and the rest was the market's direction multiplied by exposure. It came from
+exposure being nearly twice its usual size for five hours, landing squarely on a decline.
+The click that did it said neither how many pairs were queued for the new slots nor — more
+importantly — that **reverting the limit closes nothing**: a change upwards takes effect
+on the next candle, a change downwards only once the surplus positions close on their own.
+Since 0.1.13 the settings screen shows both (§8.1).
 
 ---
 
-## 5. Moduł 2: zarządca portfela
+## 5. Module 2: the portfolio manager
 
-Ten sam szkielet, inny zegar i inna decyzja. `PortfolioBook.on_day(dzień, ceny, panel)`
-zamiast `on_candle`.
+The same skeleton, a different clock and a different decision.
+`PortfolioBook.on_day(day, prices, panel)` instead of `on_candle`.
 
-Logika mieści się w czterech czystych funkcjach (`portfolio/allocator.py`, zero I/O):
+The logic fits in four pure functions (`portfolio/allocator.py`, zero I/O):
 
 ```
-effective_weights(historia, wagi_bazowe, trend)   → wagi docelowe (opcjonalny filtr trendu)
-max_drift_pct(...)                                → największy rozjazd w punktach proc.
-should_rebalance(dni_od_ostatniego, drift, cfg)   → kadencja LUB próg driftu
-rebalance_orders(...)                             → zlecenia; sprzedaże przed kupnami
+effective_weights(history, base_weights, trend)  → target weights (optional trend filter)
+max_drift_pct(...)                               → the largest divergence, in pct. points
+should_rebalance(days_since_last, drift, cfg)    → cadence OR the drift threshold
+rebalance_orders(...)                            → orders; sells before buys
 ```
 
-Sprzedaże są sortowane przed kupnami, żeby uwolniona gotówka miała czym finansować
-kupna. Filtr trendu (domyślnie **wyłączony**) parkuje aktywo poniżej średniej `ma_days`
-w `safe_asset` albo w gotówce.
+Sells are sorted before buys so the freed cash has something to fund the buys with. The
+trend filter (**off** by default) parks an asset below its `ma_days` average in the
+`safe_asset` or in cash.
 
-Rebalans jest **idempotentny w obrębie doby** — powtórzenie tego samego dnia nic nie
-zmienia. Dlatego pętla może budzić się co 6 h bez ryzyka podwójnego wykonania, a
-`--backfill` może przepuścić całą historię (5452 dni) przez dokładnie ten sam kod, co
-handel na żywo.
+A rebalance is **idempotent within a day** — repeating it on the same day changes nothing.
+That is why the loop can wake every 6h with no risk of double execution, and why
+`--backfill` can push the entire history (5452 days) through exactly the same code as live
+trading.
 
-### 5.1 Mechanika: jak wygląda rok w życiu tej księgi
+### 5.1 Mechanics: what a year in this book's life looks like
 
-Zasady gry są odwrotnością modułu 1 — nie ma prognozy, jest **pasmo i termin**:
+The rules are the inverse of module 1's — there is no forecast, there is **a band and a
+deadline**:
 
 | | |
 |---|---|
-| **Plansza** | 3 ETF-y: SPY 50% / TLT 30% / GLD 20% |
-| **Tura** | jeden dzień giełdowy |
-| **Wyzwalacz** | 90 dni od ostatniego rebalansu **LUB** dowolna waga odchylona o ≥ 5 pkt proc. |
-| **Ruch** | sprzedaj to, czego jest za dużo; kup to, czego za mało; wróć do wag docelowych |
-| **Koniec gry** | nie ma — księga jest zawsze w 100% zainwestowana |
+| **The board** | 3 ETFs: SPY 50% / TLT 30% / GLD 20% |
+| **A turn** | one trading day |
+| **The trigger** | 90 days since the last rebalance **OR** any weight off by ≥ 5 pct. points |
+| **The move** | sell what there is too much of; buy what there is too little of; return to target weights |
+| **End of game** | there is none — the book is always 100% invested |
 
-Typowy rok to **2–4 ruchy**. Reszta dni kończy się dopisaniem wiersza do `equity.jsonl`
-i niczym więcej. Przykład jednej tury, która coś zmienia:
+A typical year is **2–4 moves**. The rest of the days end with a row appended to
+`equity.jsonl` and nothing else. An example of one turn that changes something:
 
 ```
-Wartość 11 000 $ po dobrym kwartale akcji:
-  SPY  6 160 $  (56,0%)   cel 50%  →  5 500 $    SPRZEDAJ 660 $
-  TLT  2 750 $  (25,0%)   cel 30%  →  3 300 $    KUP      550 $
-  GLD  2 090 $  (19,0%)   cel 20%  →  2 200 $    KUP      110 $
+Value $11,000 after a good quarter for equities:
+  SPY  $6,160  (56.0%)   target 50%  →  $5,500    SELL $660
+  TLT  $2,750  (25.0%)   target 30%  →  $3,300    BUY  $550
+  GLD  $2,090  (19.0%)   target 20%  →  $2,200    BUY  $110
 
-max drift = 6,0 pkt ≥ 5,0  →  rebalans
-sprzedaże idą pierwsze, żeby miały czym sfinansować kupna
+max drift = 6.0 pts ≥ 5.0  →  rebalance
+sells go first, so they have something to fund the buys with
 ```
 
-Zwróć uwagę, co się właśnie stało: bot **sprzedał to, co rosło**, i dokupił tego, co
-spadało. To nie jest błąd, to jest cała strategia — i to samo jest powodem, dla którego
-na 10 latach przegrywa z „kup i trzymaj" o 33 pkt, przycinając zwycięzcę w hossie,
-a jednocześnie ma o 9,6 pkt płytsze obsunięcie. Wartością jest dyscyplina, nie alfa.
+Notice what just happened: the bot **sold what was rising** and bought more of what was
+falling. That is not a bug, that is the entire strategy — and it is the same reason it
+loses to buy & hold by 33 points over ten years, trimming the winner during a bull run,
+while having a 9.6-point shallower drawdown. The value is discipline, not alpha.
 
-Trzy szczegóły zachowania, które łatwo przeoczyć:
+Three details of the behaviour that are easy to miss:
 
-- **Pierwszy dzień jest wyjątkiem.** Świeża księga trzyma 10 000 $ gotówki i nie ma
-  driftu do zmierzenia, więc `on_day` wykonuje `initial_allocation` bezwarunkowo, poza
-  regułą kadencji.
-- **Kupno jest ograniczane gotówką**, a sprzedaż stanem posiadania (`settle_orders`).
-  Prowizja nigdy nie wprowadzi księgi na debet, nawet gdy zaokrąglenia się nie zgadzają.
-- **Filtr trendu jest wyłączony i taki ma zostać.** Włączony zamienia rebalanser
-  w strategię: aktywo poniżej średniej 200-dniowej ląduje w TLT albo w gotówce. To jest
-  pole do eksperymentów, nie ulepszenie — README pokazuje, że w hossie kosztuje zwrot.
+- **The first day is an exception.** A fresh book holds $10,000 in cash and has no drift to
+  measure, so `on_day` performs an `initial_allocation` unconditionally, outside the
+  cadence rule.
+- **Buying is limited by cash**, and selling by holdings (`settle_orders`). A fee will
+  never push the book into overdraft, even when the rounding does not line up.
+- **The trend filter is off and should stay off.** Switched on, it turns a rebalancer into
+  a strategy: an asset below its 200-day average lands in TLT or in cash. That is a field
+  for experiments, not an improvement — the README shows it costs return in a bull market.
 
 ---
 
-## 6. Moduł 3: ranking przekrojowy (badanie)
+## 6. Module 3: cross-sectional ranking (a study)
 
-Nie ma księgi ani kontenera — jest skrypt i raport. Sygnał to momentum
-`lookback_days` z **pominięciem** ostatnich `skip_days` (najświeższy ruch ma skłonność
-do odwrotu; liczenie go wmieszałoby sygnał rewersji w sygnał momentum).
-`select_legs` przycina nogi tak, żeby się nie nakładały — przy wąskim uniwersum
-5 long + 5 short z 8 nazw kupowałoby i sprzedawało to samo.
+There is no book and no container — there is a script and a report. The signal is
+`lookback_days` of momentum **skipping** the last `skip_days` (the freshest move tends to
+revert; counting it would mix a reversion signal into a momentum signal). `select_legs`
+trims the legs so they do not overlap — with a narrow universe, 5 long + 5 short out of 8
+names would be buying and selling the same thing.
 
-Ten sam kod chodzi na krypto i na ETF-ach, na **czterech rozłącznych oknach**, i raport
-pokazuje wszystkie — bo trzy razy w tym projekcie „najlepszy" wynik z jednego okna
-okazał się szumem.
+The same code runs on crypto and on ETFs, over **four disjoint windows**, and the report
+shows all of them — because three times in this project the "best" result from a single
+window turned out to be noise.
 
-### 6.1 Mechanika: jedna tura rankingu
+### 6.1 Mechanics: one turn of the ranking
 
 ```
-co ~20 dni:
-  1. policz wynik każdego z 25 (krypto) / 29 (ETF) aktywów:
-     zwrot od −125 do −5 dnia  ← ostatnie 5 dni celowo pominięte
-  2. posortuj; weź 5 najsilniejszych (long) i 5 najsłabszych (short)
-  3. przytnij nogi, żeby się nie nakładały
-  4. przebuduj koszyk do równych wag; koszty przez ten sam fills.py
-  5. trzymaj przez kolejne 20 dni, nie patrząc na nic
+every ~20 days:
+  1. compute a score for each of the 25 (crypto) / 29 (ETF) assets:
+     the return from day −125 to day −5  ← the last 5 days deliberately skipped
+  2. sort; take the 5 strongest (long) and the 5 weakest (short)
+  3. trim the legs so they do not overlap
+  4. rebuild the basket to equal weights; costs through the same fills.py
+  5. hold for the next 20 days, looking at nothing
 ```
 
-Trzy różnice w zachowaniu wobec modułu 1, które są istotą tego badania: zakład dotyczy
-**różnicy między aktywami**, a nie kierunku rynku; nie ma stop-lossa ani take-profitu
-(pozycja żyje dokładnie do następnego przerankowania); i nie ma tu żadnego uczenia —
-sygnałem jest jawny wzór, nie model.
+Three behavioural differences from module 1, which are the substance of this study: the
+bet is on the **difference between assets** rather than on the market's direction; there
+is no stop-loss and no take-profit (a position lives exactly until the next re-ranking);
+and there is no learning here at all — the signal is an explicit formula, not a model.
 
-Dlatego poprzeczka jest inna dla każdego wariantu: long-only mierzy się z koszykiem
-kup&trzymaj, a long-short z **gotówką** — książka o ekspozycji netto 0,4% jest
-praktycznie neutralna rynkowo, więc porównanie z w pełni długim koszykiem zawyżałoby
-ją w każdym spadku.
+That is why the bar differs per variant: long-only is measured against a buy-and-hold
+basket, and long-short against **cash** — a book with 0.4% net exposure is practically
+market-neutral, so comparing it with a fully long basket would flatter it in every
+downturn.
 
 ---
 
-## 7. Backtest i uczciwość pomiaru
+## 7. The backtest and honest measurement
 
-`backtest/runner.py` jest event-driven i przechodzi przez `fills.py` (§3.5). Poza tym
-liczy się kilka rzeczy w `backtest/metrics.py`, które zmieniają interpretację wyniku:
+`backtest/runner.py` is event-driven and goes through `fills.py` (§3.5). Beyond that, a
+few things in `backtest/metrics.py` change how a result should be read:
 
-- `avg_exposure_pct` i `time_in_market_pct` — ile konta naprawdę siedzi w rynku;
-- `return_on_risked_pct` — wynik przeliczony na pieniądze, które grały;
-- benchmark jest liczony **dwa razy**: „wszystko w rynku" i „tyle w rynku co bot".
+- `avg_exposure_pct` and `time_in_market_pct` — how much of the account is really in the
+  market;
+- `return_on_risked_pct` — the result recomputed against the money that played;
+- the benchmark is computed **twice**: "all in the market" and "matched to the bot".
 
-Powód jest prosty: scalper trzyma ~20–30% konta, więc porównanie z kimś, kto włożył
-wszystko, chwali bota za samą **nieobecność** w spadkach. Przelicznik na ekspozycję
-celowo się nie pokazuje, gdy bot był w rynku bardzo rzadko — mnożnik ×166 nie jest
-informacją, tylko artefaktem.
+The reason is simple: the scalper holds ~20–30% of the account, so comparing against
+someone who put in everything praises the bot merely for being **absent** during the
+falls. The exposure conversion deliberately declines to show itself when the bot was in
+the market very rarely — a ×166 multiplier is not information, it is an artefact.
 
-`scripts/research/` to osobny zestaw skryptów odpowiadających na pytanie „czy to
-w ogóle ma przewagę", na trzech zasadach: rozłączne okna z modelem uczonym od nowa,
-ten sam model kosztów co produkcja, i **naiwne kontrole** (zawsze long, zawsze short,
-losowo, nie handluj). Strategia, która nie bije kontroli, niczego nie udowodniła.
+`scripts/research/` is a separate set of scripts answering "does this have any edge at
+all", on three rules: disjoint windows with the model retrained from scratch, the same
+cost model as production, and **naive controls** (always long, always short, at random, do
+not trade). A strategy that does not beat the controls has proved nothing.
 
-### 7.1 Backtest pary a backtest książki (`backtest/book.py`)
+### 7.1 A per-pair backtest versus a book backtest (`backtest/book.py`)
 
-`runner.py` liczy **jedną parę na osobnym rachunku, bez limitu pozycji**. To właściwe
-pytanie przy ocenie modelu i tak pyta bramka refreshera. Jest to jednak **niewłaściwe
-pytanie o planszę**: skoro każda para dostaje własny kapitał i własne nieograniczone
-sloty, dorzucenie par podnosi średnią z definicji — dopisuje kolejny rachunek, a nie
-kolejnego konkurenta. Żywa księga ma jeden portfel i `max_open_positions` miejsc.
+`runner.py` counts **one pair on its own account, with no position limit**. That is the
+right question when judging a model, and it is what the refresher's gate asks. It is,
+however, **the wrong question about the board**: since every pair gets its own capital and
+its own unlimited slots, adding pairs raises the average by definition — it appends
+another account, not another competitor. A live book has one portfolio and
+`max_open_positions` slots.
 
-`book.py` liczy tę konkurencję: wspólna oś czasu wszystkich par, jedna gotówka, ten sam
-`RiskManager` co silnik (więc limit i kill-switch nie są tu pisane drugi raz) i jawna
-reguła przydziału — `fcfs` (kolejność z configu, czyli to, co robi silnik) albo
-`best_first` (wygrywa najwyższe prawdopodobieństwo). Zwraca jedną liczbę, której
-`runner.py` wyprodukować nie umie: **ile sygnałów książka wyrzuciła, bo nie miała
-wolnego slotu**. Przy 18 parach i limicie 3 to ~3000 kandydatów na 10 okien.
+`book.py` counts that competition: one shared timeline across all pairs, one pot of cash,
+the same `RiskManager` the engine uses (so the cap and the kill-switch are not written a
+second time here) and an explicit allocation rule — `fcfs` (the order from the config,
+i.e. what the engine does) or `best_first` (the highest probability wins). It returns one
+number `runner.py` cannot produce: **how many signals the book threw away for lack of a
+free slot**. At 18 pairs and a cap of 3, that is ~3000 candidates over 10 windows.
 
-Dwie świadome różnice wobec `runner.py`, obie w stronę silnika, bo to silnik jest tu
-modelowany: wielkość pozycji liczy się od **kapitału**, nie od gotówki (przy wspólnym
-portfelu wersja gotówkowa po cichu zmniejsza każdą kolejną pozycję), a tryb `maker` jest
-odrzucany wyjątkiem — zlecenie oczekujące trzymałoby slot albo nie, a w silniku nie ma
-odpowiedzi do skopiowania, bo silnik handluje taker.
+Two deliberate differences from `runner.py`, both in the engine's direction, because it is
+the engine being modelled: position size is computed from **equity** rather than cash
+(with a shared portfolio the cash version quietly shrinks each successive position), and
+`maker` mode is rejected with an exception — a resting order would either hold a slot or
+not, and there is no answer in the engine to copy, because the engine trades taker.
 
-Czego ten moduł **nie** zmienia: bramka promocji w `refresh.py` dalej mierzy „model
-kontra naiwne kontrole" po parach. To inne pytanie i celowo zostało nietknięte.
+What this module does **not** change: the promotion gate in `refresh.py` still measures
+"model versus naive controls" per pair. That is a different question and was deliberately
+left untouched.
 
 ---
 
-## 8. Konfiguracja: co wchodzi na gorąco, a co wymaga restartu
+## 8. Configuration: what applies hot, and what needs a restart
 
-Panel **nigdy nie pisze do `config/config.yaml`**. Ten plik jest udokumentowaną
-bazą — nosi komentarze wyjaśniające, dlaczego 4h, dlaczego okno 2000 dni, po co
-istnieje księga `ryzyko_100`. `yaml.safe_dump` skasowałby je wszystkie przy pierwszym
-zapisie. Zamiast tego powstaje `config/config.overrides.yaml`, doklejany przez
-`load_config`, więc „przywróć domyślne" to usunięcie klucza, a `git diff` pokazuje
-tylko to, co naprawdę się zmieniło.
+The panel **never writes to `config/config.yaml`**. That file is a documented baseline —
+it carries comments explaining why 4h, why a 2000-day window, why the `ryzyko_100` book
+exists. `yaml.safe_dump` would delete all of them on the first write. Instead
+`config/config.overrides.yaml` is created and merged in by `load_config`, so "restore
+defaults" is a deleted key and a `git diff` shows only what really changed.
 
-Dwie gwarancje `config_store.py`:
+Two guarantees from `config_store.py`:
 
-1. **nic niepoprawnego nie trafia na dysk** — zmiana jest scalana i walidowana przez
-   model pydantic *przed* zapisem;
-2. **każda zmiana jest w dzienniku** (`runtime/config_history.jsonl`) — zmiana
-   parametrów w locie robi z krzywej kapitału mieszankę dwóch strategii, a dziennik
-   pozwala panelowi narysować szew zamiast po cichu uśrednić.
+1. **nothing invalid reaches the disk** — a change is merged and validated through the
+   pydantic model *before* being written;
+2. **every change is journalled** (`runtime/config_history.jsonl`) — changing parameters
+   on the fly turns the equity curve into a blend of two strategies, and the journal lets
+   the panel draw the seam rather than quietly average over it.
 
-Pola dzielą się na dwie klasy:
+Fields fall into two classes:
 
 - **HOT** (`prob_threshold`, `tp/sl_atr_mult`, `horizon_bars`, `position_pct`,
-  `max_open_positions`, prowizje…) — `Book` czyta je z `self.cfg` przy każdej świecy,
-  więc wchodzą na następnym barze bez restartu.
-- **RESTART** (`exchange.symbols`, `timeframe`, `warmup_bars`, lista `variants`,
-  `initial_capital`…) — czytane raz w `__init__` albo w `run()`. Panel pisze flagę
-  `runtime/restart_requested`, `_restart_watcher` ją widzi, silnik **zapisuje księgi
-  i wychodzi**, Docker go wskrzesza, `Book.restore()` odczytuje gotówkę i pozycje.
-  Panel nie ma gniazda Dockera i nie powinien mieć.
+  `max_open_positions`, fees…) — `Book` reads them off `self.cfg` on every candle, so they
+  apply on the next bar without a restart.
+- **RESTART** (`exchange.symbols`, `timeframe`, `warmup_bars`, the `variants` list,
+  `initial_capital`…) — read once in `__init__` or in `run()`. The panel writes a
+  `runtime/restart_requested` flag, `_restart_watcher` sees it, the engine **saves the
+  books and exits**, Docker resurrects it, and `Book.restore()` reads back the cash and
+  positions. The panel has no Docker socket and should not have one.
 
-Sam czujnik zmiany jest **hashem treści** obu plików, nie mtime — i to jest poprawka,
-która kosztowała jeden realny błąd. `mtime` porównywany przez `>` był ślepy na trzy
-rzeczy naraz: skasowanie pliku (przywrócenie domyślnej wartości!) dawało 0.0, czyli
-„nigdy nowszy" — na zawsze; dwa zapisy w tej samej sekundzie zlewały się w jeden;
-wgranie starszej kopii było ignorowane. Skutek za każdym razem ten sam: panel pokazuje
-nowe parametry, a bot do końca życia kontenera handluje na starych.
+The change sensor itself is a **hash of the contents** of both files, not an mtime — and
+that is a fix that cost one real bug. An `mtime` compared with `>` was blind to three
+things at once: deleting the file (restoring a default!) gave 0.0, i.e. "never newer" —
+forever; two writes in the same second merged into one; and uploading an older copy was
+ignored. The consequence was the same every time: the panel shows the new parameters while
+the bot trades on the old ones for the rest of the container's life.
 
-Symetryczny szczegół: **nieudany odczyt configu nie jest zapamiętywany jako
-załatwiony**. Stary kod odhaczał plik, zanim spróbował go wczytać — jeden pechowy
-odczyt zamrażał księgę aż do restartu.
+A symmetric detail: **a failed configuration read is not remembered as done**. The old
+code ticked the file off before trying to load it — one unlucky read froze a book until a
+restart.
 
-Model podmieniany przez refreshera jest pilnowany zwykłym `mtime`, i to jest właściwy
-wybór: plik ma megabajty (hash przy każdej świecy nie byłby darmowy), podmienia go
-tylko jeden proces i nikt go nie kasuje.
+The model swapped in by the refresher is watched by an ordinary `mtime`, and that is the
+right choice: the file is megabytes (hashing it on every candle would not be free), only
+one process swaps it, and nobody deletes it.
 
-### 8.1 Mechanika: co się dzieje po kliknięciu „Zapisz"
+### 8.1 Mechanics: what happens after clicking "Save"
 
 ```
-panel                                        silnik (każda z 4 ksiąg, osobno)
-─────                                        ────────────────────────────────
-1. walidacja pydantic (scalony config)
-2. zapis config.overrides.yaml (atomowy)
-3. wiersz do config_history.jsonl
-   (kto, kiedy, z czego na co)
-4a. pole HOT      → koniec, czekaj             ...co świecę: hash treści się zmienił?
-                                               → wczytaj, porównaj pole po polu
-                                               → podmień self.cfg, alarm „zmieniono
-                                                 ustawienia: prob_threshold: 0,55 → 0,60"
-                                               → od tego bara handluje po nowemu
-4b. pole RESTART  → dopisz flagę               ...co 10 s: flaga nowsza niż mój start?
-    runtime/restart_requested                  → zapisz księgi, anuluj feedy, wyjdź
-                                               → Docker wskrzesza, restore() wraca
-                                                 z gotówką i pozycjami
+panel                                        engine (each of the books, separately)
+─────                                        ──────────────────────────────────────
+1. pydantic validation (merged config)
+2. write config.overrides.yaml (atomic)
+3. a row into config_history.jsonl
+   (who, when, from what to what)
+4a. a HOT field   → done, wait                 …each candle: has the content hash changed?
+                                               → load it, compare field by field
+                                               → swap self.cfg, alarm "settings changed:
+                                                 prob_threshold: 0.55 → 0.60"
+                                               → from this bar it trades the new way
+4b. a RESTART field → write the flag           …every 10 s: is the flag newer than my start?
+    runtime/restart_requested                  → save the books, cancel the feeds, exit
+                                               → Docker resurrects it, restore() comes
+                                                 back with the cash and the positions
 ```
 
-Zmiana jest widoczna z drugiej strony: `state.json` niesie `live_config` — parametry,
-które księga **w tej chwili egzekwuje** — a ekran ustawień porównuje je z dyskiem
-i ostrzega przy rozjeździe. Ostrzeżenie czeka na świecę, przy której zmiana powinna
-była wejść, i porównuje każdą księgę z jej własnym wariantem, żeby nie straszyć zaraz
-po zapisie ani nie mylić `ryzyko_100` z awarią.
+The change is visible from the other side: `state.json` carries `live_config` — the
+parameters the book is **currently enforcing** — and the settings screen compares them with
+the disk and warns on a divergence. The warning waits for the candle at which the change
+should have taken effect, and compares each book against its own variant, so it neither
+cries wolf right after a save nor mistakes `ryzyko_100` for a fault.
 
-Zmiana parametrów w locie robi z krzywej kapitału mieszankę dwóch strategii — i to jest
-powód istnienia dziennika z punktu 3. Panel rysuje szew, zamiast po cichu uśrednić.
+Changing parameters on the fly turns the equity curve into a blend of two strategies — and
+that is the reason point 3's journal exists. The panel draws the seam rather than quietly
+averaging.
 
-**Dwie zmiany ryzyka pytają, zanim wejdą.** Podniesienie sufitu ekspozycji
-(`position_pct × max_open_positions` — obojętne, którą połową) otwiera okno
-z potwierdzeniem, bo skutek przychodzi jedną świecą później i nie da się go cofnąć:
-pozycje otwarte przy wyższym limicie żyją do celu, bezpiecznika albo terminu, a samo
-przywrócenie niższej wartości nie zamyka żadnej. Sekcja „Ryzyko" pokazuje przy tym, ile
-par **czeka w kolejce** na zwolnione miejsce — liczone z `state.json` jako sygnały
-odrzucone przez sam sufit (kill-switch się nie liczy, bo jego podniesienie limitu nie
-odblokuje). Ta liczba ma sens dopiero od 0.1.12: wcześniej silnik sprawdzał limit
-**przed** zapytaniem modelu, więc odrzucona para nie miała przy sobie żadnego
-prawdopodobieństwa. Skąd to wszystko: §4.8.
+**Two risk changes ask before they take effect.** Raising the exposure ceiling
+(`position_pct × max_open_positions` — either half of it) opens a confirmation dialog,
+because the effect arrives one candle later and cannot be taken back: positions opened
+under the higher limit live until their target, their stop or their deadline, and merely
+restoring the lower value closes none of them. The "Risk" section also shows how many
+pairs are **queued** for a freed slot — counted from `state.json` as signals rejected by
+the ceiling alone (the kill-switch does not count, because raising the limit will not
+unblock it). That number only became meaningful in 0.1.12: before then the engine checked
+the limit **before** asking the model, so a rejected pair had no probability attached.
+Where all this comes from: §4.8.
 
 ---
 
-## 9. Refresher: cotygodniowa bramka
+## 9. The refresher: a weekly gate
 
-`scripts/refresh.py`, w pętli `sleep 604800`:
+`scripts/refresh.py`, in a `sleep 604800` loop:
 
-1. dociąga świeże świece (przyrostowo),
-2. trenuje **kandydata** bez ostatnich `validation_days` dni,
-3. backtestuje go na tym oknie — danych, których nigdy nie widział — obok naiwnych
-   kontroli na dokładnie tych samych barach,
-4. **bramka**: promuje tylko kandydata, który nie jest katastrofą, bije „nie handluj"
-   i bije **każdą** naiwną kontrolę,
-5. po przejściu: trenuje finalny model na całości i zapisuje pod produkcyjną nazwą.
+1. fetches fresh candles (incrementally),
+2. trains a **candidate** without the last `validation_days` days,
+3. backtests it on that window — data it has never seen — alongside naive controls on
+   exactly the same bars,
+4. **the gate**: it promotes only a candidate that is not a catastrophe, beats "do not
+   trade" and beats **every** naive control,
+5. on passing: trains a final model on everything and saves it under the production name.
 
-Bot łapie nowy plik przez `_maybe_reload_models` na najbliższej świecy — bez restartu.
-Kod wyjścia: `0` = promocja, `2` = bramka odrzuciła (stary model zostaje), `1` = błąd.
+The bot picks the new file up through `_maybe_reload_models` on the next candle — no
+restart. Exit codes: `0` = promoted, `2` = the gate refused (the old model stays), `1` =
+error.
 
-Bramka porównywała kiedyś z „kup i trzymaj" — i to było prawie darmowe do przejścia
-w spadającym rynku: kandydat, który ledwo handluje, zwraca ~0% i „bije" benchmark,
-który stracił 17%. Naiwne kontrole są osiągalnymi alternatywami, więc ich pobicie
-coś znaczy.
+The gate used to compare against buy & hold — and that was nearly free to pass in a
+falling market: a candidate that barely trades returns ~0% and "beats" a benchmark that
+lost 17%. Naive controls are attainable alternatives, so beating them means something.
 
-### 9.1 Mechanika: co dzieje się w tygodniu, w którym bramka odrzuca
+### 9.1 Mechanics: what happens in a week when the gate refuses
 
-Domyślnym wynikiem tego rytuału jest **„nic się nie zmienia"** — i tak ma być.
+The default outcome of this ritual is **"nothing changes"** — and that is how it should
+be.
 
 ```
-tydzień N     dociągnięcie danych  →  trening kandydata  →  backtest OOS
-              kandydat −0,38%  vs  „nic nie rób" +0,00%   →  ODRZUCONY
-              models/*.joblib nietknięte, bot handluje dalej starym modelem
+week N        fetch data  →  train a candidate  →  OOS backtest
+              candidate −0.38%  vs  "do nothing" +0.00%   →  REFUSED
+              models/*.joblib untouched, the bot carries on with the old model
               runtime/refresh_status.json: {"status": "gate_failed", "detail": "..."}
-              kod wyjścia 2; docker-compose loguje komunikat i śpi 7 dni
+              exit code 2; docker-compose logs the message and sleeps 7 days
 ```
 
-Ostatni realny przebieg (2026-08-07) wyglądał dokładnie tak. Trzy konsekwencje warte
-wypowiedzenia:
+The last real run (2026-08-07) looked exactly like that. Three consequences worth stating:
 
-- **Bot nigdy nie stoi z powodu odrzucenia.** Model produkcyjny jest niezależnym
-  plikiem; kandydat powstaje obok i ginie, jeśli nie przejdzie.
-- **Podmiana nie wymaga restartu ani synchronizacji.** Refresher zapisuje plik,
-  a każda księga zauważa nowy `mtime` przy najbliższej świecy (§8, akapit o modelu).
-  Cztery księgi mogą przełączyć się na różnych barach — i to nie szkodzi, bo model
-  jest bezstanowy.
-- **Odrzucenie jest widoczne w panelu**, a nie tylko w logu kontenera:
-  `refresh_status.json` czyta zakładka „Zdrowie". Bramka, o której nikt się nie
-  dowiaduje, po kilku miesiącach nie różni się od bramki wyłączonej.
+- **The bot never stops because of a refusal.** The production model is an independent
+  file; the candidate is created beside it and dies if it does not pass.
+- **The swap needs neither a restart nor synchronisation.** The refresher writes the file,
+  and each book notices the new `mtime` on its next candle (§8, the paragraph about the
+  model). Four books may switch on different bars — and that does no harm, because the
+  model is stateless.
+- **A refusal is visible in the panel**, not only in the container log:
+  `refresh_status.json` is read by the "Health" tab. A gate nobody hears about is, after a
+  few months, indistinguishable from a gate that is switched off.
 
-Ten sam plik jest jedynym pisarzem `data/` po stronie modułu 1: dociąganie świec
-w refresherze ustala też, ile historii bot w ogóle kiedykolwiek zbierze
+That same file is the only writer of `data/` on module 1's side: how much history the
+refresher fetches also determines how much the bot ever collects
 (`model.train_window_days`).
 
 ---
 
-## 10. Panel (`dashboard/`)
+## 10. The panel (`dashboard/`)
 
-Streamlit, **tylko do odczytu** w zakresie stanu ksiąg; pisze wyłącznie konfigurację.
+Streamlit, **read-only** as far as book state goes; it writes configuration only.
 
-- `app.py` — ekran główny, metryki, krzywe, przełącznik modułu
-- `journals.py` — czytanie `*.jsonl` z cache'em kluczowanym **odciskiem pliku**, nie TTL.
-  Streamlit przelicza cały skrypt przy każdym kliknięciu; bez tego przeciągnięcie
-  suwaka re-parsowałoby cały dziennik kapitału. Klucz na treści, a nie czas, znaczy
-  „nowy wiersz widać natychmiast, a nie po wygaśnięciu cache".
-- `humanize.py` — liczby i zdarzenia na polskie zdania („kupił ETH za 100 $ — teraz +2 $")
-- `price_view.py` — wykres kursu ze znacznikami transakcji; czyta `trades.jsonl` **i**
-  otwarte pozycje ze `state.json`
-- `config_view.py` — ekran ustawień; woła `auth.current_user()` przed każdym zapisem
-- `research_view.py` — moduł 3 i przesiew korelacji, z ostatniego raportu w `models/reports/`
-- `auth.py` — dziś zwraca `"local"` i `True`. To szew, nie zabezpieczenie: gdy pojawi
-  się logowanie, zmienia się jedna implementacja, a nie każde miejsce zapisu.
+- `app.py` — the main screen, metrics, curves, the module switch
+- `journals.py` — reading `*.jsonl` with a cache keyed by the **file's fingerprint**, not
+  by a TTL. Streamlit re-runs the whole script on every click; without this, dragging a
+  slider would re-parse the entire equity journal. Keying on content rather than time
+  means "a new row is visible immediately, not once a cache expires".
+- `humanize.py` — numbers and events into plain sentences ("Bought ETH for $100 — now +$2")
+- `price_view.py` — the price chart with trade markers; it reads `trades.jsonl` **and** the
+  open positions from `state.json`
+- `config_view.py` — the settings screen; it calls `auth.current_user()` before every write
+- `research_view.py` — module 3 and the correlation screen, from the newest report in
+  `models/reports/`
+- `i18n.py` / `locales/` — which language the viewer reads. The catalogues are plain
+  dicts; the dashboard keeps the choice per session, because one process serves several
+  viewers.
+- `auth.py` — today it returns `"local"` and `True`. It is a seam, not a security system:
+  when a login appears, one implementation changes rather than every write site.
 
-### 10.1 Mechanika: cykl życia jednego kliknięcia
+### 10.1 Mechanics: the life cycle of one click
 
-Streamlit nie ma zdarzeń — ma **przeliczenie całego skryptu od nowa** przy każdej
-interakcji i przy każdym auto-odświeżeniu (15 s, na telefonie 60 s, bo 4h świeca
-zamyka się sześć razy na dobę i częstsze pytanie kosztuje tylko transfer).
+Streamlit has no events — it has a **complete re-run of the script** on every interaction
+and every auto-refresh (60 s, because a 4h candle closes six times a day and asking more
+often only costs CPU).
 
 ```
-klik / tik odświeżenia
-   → app.py leci od pierwszej linii
-   → load_config()                       (tanie)
-   → journals.load_*()                   ← cache kluczowany ODCISKIEM PLIKU
-        plik się nie zmienił → z cache, zero parsowania
-        silnik dopisał wiersz → parsuj i pokaż od razu
-   → st.session_state trzyma to, co wybrał człowiek
-        (rozwinięty instrument, zakres 7d/30d, moduł)
+click / refresh tick
+   → app.py runs from its first line
+   → load_config()                       (cheap)
+   → journals.load_*()                   ← cache keyed by the FILE'S FINGERPRINT
+        the file has not changed → from cache, zero parsing
+        the engine appended a row → parse and show it at once
+   → st.session_state holds what the human chose
+        (the expanded instrument, the 7d/30d range, the module, the language)
    → render
 ```
 
-Dwie decyzje wynikające wprost z tego modelu:
+Two decisions follow directly from this model:
 
-- **Cache na treści, nie na czasie.** TTL dałby okno, w którym panel pokazuje stan
-  sprzed chwili, choć plik jest już nowy. Odcisk pliku znaczy „nowy wiersz widać przy
-  najbliższym odświeżeniu, ani sekundy później".
-- **Wybór musi żyć w `session_state`.** Bez tego odświeżenie co 15 s zamykałoby
-  rozwinięty wykres kursu — element interfejsu zamknąłby się sam, zanim ktokolwiek
-  zdążyłby na niego spojrzeć.
+- **Cache on content, not on time.** A TTL would give a window in which the panel shows a
+  moment-old state although the file is already new. A file fingerprint means "a new row is
+  visible at the next refresh, not a second later".
+- **A choice has to live in `session_state`.** Without that, the refresh would close an
+  expanded price chart — an interface element would shut itself before anyone had a chance
+  to look at it.
 
-Panel nigdy nie liczy na żywo niczego ciężkiego. Zakładka „Badania" czyta **ostatni
-zapisany raport** z `models/reports/` i przelicza wyłącznie na danych z dysku, na
-wyraźne żądanie — pobieranie w trakcie renderowania zablokowałoby cały ekran.
+The panel never computes anything heavy live. The "Research" tab reads the **newest saved
+report** from `models/reports/` and recomputes only on data already on disk, on an explicit
+request — downloading during a render would block the whole screen.
 
-Czego panel nie może z definicji: uruchomić kontenera, zabić bota, zamknąć pozycji.
-Ma dokładnie dwa kanały wpływu na silnik — nakładkę konfiguracji i flagę restartu (§8).
-Gniazda Dockera nie ma i mieć nie powinien.
+What the panel cannot do by definition: start a container, kill the bot, close a position.
+It has exactly two channels of influence over the engine — the configuration overrides and
+the restart flag (§8). There is no Docker socket, and there should not be one.
 
 ---
 
-## 11. Mapa katalogów
+## 11. A map of the directories
 
 ```
 src/trademon/
-  config.py, config_store.py   konfiguracja: model pydantic + bezpieczny zapis z panelu
-  data/        ingestion.py    pobieranie przez CCXT (przyrostowe)
-               storage.py      Parquet, wykrywanie dziur
-               funding.py      funding rate (opcjonalne cechy)
-  features/    engineering.py  26 (+4) cech, wyłącznie z przeszłości
+  config.py, config_store.py   configuration: a pydantic model + safe writes from the panel
+  i18n.py, locales/            which language the reader gets; one dict per language
+  data/        ingestion.py    downloading through CCXT (incremental)
+               storage.py      Parquet, gap detection
+               funding.py      funding rate (optional features)
+  features/    engineering.py  26 (+4) features, strictly from the past
   labeling/    triple_barrier.py
-  models/      train.py        walk-forward + purge, LightGBM lub fallback
-  backtest/    runner.py       event-driven, jedna para na osobnym rachunku
-               book.py         cała książka: wspólna gotówka i wspólny limit pozycji
-               metrics.py      Sharpe, obsunięcie, ekspozycja, wynik od ryzykowanych
-  execution/   fills.py        model kosztów — WSPÓLNY dla backtestu i produkcji
+  models/      train.py        walk-forward + purge, LightGBM or a fallback
+  backtest/    runner.py       event-driven, one pair on its own account
+               book.py         the whole book: shared cash and a shared position cap
+               metrics.py      Sharpe, drawdown, exposure, return on risked
+  execution/   fills.py        the cost model — SHARED by the backtest and production
                executors.py    paper / live (CCXT)
-  risk/        manager.py      sizing, sufit pozycji, kill-switch
-  engine/      loop.py         Book + TradingEngine (moduł 1)
+  risk/        manager.py      sizing, the position ceiling, the kill-switch
+  engine/      loop.py         Book + TradingEngine (module 1)
                state.py        RuntimeStore: state.json + JSONL
                notify.py       webhook (Discord/Slack)
-  portfolio/   allocator.py    czyste funkcje rebalansu
-               book.py         księga dzienna
-               engine.py       pętla + --once / --backfill
-               correlation.py  przesiew dywersyfikacji
-  crosssec/    signal.py       momentum przekrojowe (moduł 3)
+  portfolio/   allocator.py    pure rebalancing functions
+               book.py         the daily book
+               engine.py       the loop + --once / --backfill
+               correlation.py  the diversification screen
+  crosssec/    signal.py       cross-sectional momentum (module 3)
                backtest.py, validate.py, panels.py
-  research/    lab.py          rozłączne okna, naiwne kontrole
-               log.py          dziennik eksperymentów
-  dashboard/   app.py + widoki
+  research/    lab.py          disjoint windows, naive controls
+               log.py          the experiment journal
+  dashboard/   app.py + the views
 
-config/    config.yaml (baza, z komentarzami) + *.overrides.yaml (z panelu)
-data/      Parquet per (giełda, symbol, interwał)
+config/    config.yaml (the baseline, with comments) + *.overrides.yaml (from the panel)
+data/      Parquet per (exchange, symbol, interval)
 models/    *.joblib + reports/
-runtime/   <wariant>/{state.json, trades.jsonl, equity.jsonl, alerts.jsonl}
+runtime/   <variant>/{state.json, trades.jsonl, equity.jsonl, alerts.jsonl}
            config_history.jsonl, experiments.jsonl, restart_requested
 scripts/   download_data, train, backtest, refresh, portfolio_backtest,
            correlation_screen, crosssec_backtest, research/*
@@ -849,27 +873,29 @@ scripts/   download_data, train, backtest, refresh, portfolio_backtest,
 
 ---
 
-## 12. Czego ten system celowo nie robi
+## 12. What this system deliberately does not do
 
-- **Nie handluje na świecy otwartej.** Nigdzie. Trzy miejsca odcinają ją niezależnie.
-  Ticker odświeża wycenę co minutę i nie ma prawa niczego kupić.
-- **Nie uśrednia, nie dokłada, nie przesuwa stopa.** Jedna pozycja na parę, wypłata
-  i termin ustalone przy wejściu (§4.1). Każdy dodatkowy mechanizm to kolejny parametr
-  do dopasowania przy przewadze bliskiej zeru.
-- **Nie używa dźwigni.** Short jest liczony po futuresowemu (margin = nominał wejścia),
-  ale w backteście i na papierze; na spocie nie da się go wykonać.
-- **Nie zmienia struktury bez restartu.** Lepiej zejść na 20 sekund niż handlować
-  konfiguracją, której połowa weszła.
-- **Nie ma bazy danych ani API między procesami.** Cztery kontenery, jeden katalog,
-  jeden pisarz na plik.
-- **Nie wybiera zwycięskiego okna.** Raporty pokazują wszystkie okna, także te złe.
-- **Nie modeluje kosztu funding** przy shortach na krypto (moduł 3 wprost to zastrzega)
-  ani nie koryguje **błędu przetrwania** w uniwersum par.
-- **Nie udaje, że rozliczenie TP jest pewne.** Silnik budzi się wyłącznie na zamknięciu
-  świecy, a mimo to rozlicza take-profit po cenie bariery — zakładając zlecenie, które
-  wykonało się wewnątrz świecy. To założenie optymistyczne i dotyczy całej dotychczasowej
-  historii pomiarów; jest zapisane jako otwarta sprawa, a nie zamiecione pod dywan.
-- **Nie chroni panelu logowaniem** — jest przeznaczony na sieć lokalną. `auth.py`
-  istnieje po to, żeby to kiedyś zmienić w jednym miejscu.
-- **Nie wysyła prawdziwych zleceń bez świadomej zmiany** `mode: live` w konfiguracji
-  i kluczy API w `.env`. Domyślnie wszystko jest papierowe.
+- **It does not trade on an open candle.** Nowhere. Three places cut it off independently.
+  The ticker refreshes the valuation every minute and has no right to buy anything.
+- **It does not average down, add to a position, or move a stop.** One position per pair,
+  with the payout and the deadline fixed at entry (§4.1). Every additional mechanism is
+  another parameter to fit when the edge is near zero.
+- **It uses no leverage.** A short is accounted for futures-style (margin = the entry
+  notional), but in the backtest and on paper; on spot it cannot be executed.
+- **It does not change structure without a restart.** Better to go down for 20 seconds than
+  to trade a configuration half of which has taken effect.
+- **There is no database and no API between processes.** Four containers, one directory,
+  one writer per file.
+- **It does not pick a winning window.** The reports show every window, including the bad
+  ones.
+- **It does not model funding cost** on crypto shorts (module 3 says so outright), nor
+  does it correct for **survivorship bias** in the universe of pairs.
+- **It does not pretend TP settlement is certain.** The engine wakes only at a candle's
+  close, and yet settles a take-profit at the barrier price — assuming an order that
+  executed inside the candle. That assumption is optimistic and underlies every
+  measurement in this project's history; it is recorded as an open question rather than
+  swept under the rug.
+- **It does not protect the panel with a login** — it is meant for a local network.
+  `auth.py` exists so that this can be changed in one place one day.
+- **It does not send real orders without a deliberate change** of `mode: live` in the
+  configuration and API keys in `.env`. By default everything is paper.

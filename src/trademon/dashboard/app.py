@@ -1,9 +1,11 @@
 """TraDaemon dashboard — read-only lab view over the engine's runtime files.
 
 Two modules share this dashboard: the crypto scalper and the portfolio manager.
-Each opens on a **beginner screen** (plain Polish, no jargon) with the technical
-tabs tucked behind "Szczegóły dla dociekliwych". The engine is the only writer;
-this only reads state.json / *.jsonl. Run: streamlit run src/trademon/dashboard/app.py
+Each opens on a **beginner screen** (plain language, no jargon) with the technical
+tabs tucked behind a "details" expander. Every sentence comes from the message
+catalogues in `trademon.locales`, so the viewer picks Polish or English per session.
+The engine is the only writer; this only reads state.json / *.jsonl.
+Run: streamlit run src/trademon/dashboard/app.py
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from trademon import __version__, config_store
+from trademon import __version__, config_store, i18n
 from trademon.backtest.metrics import (
     avg_exposure_pct,
     exposure_series,
@@ -30,6 +32,7 @@ from trademon.backtest.metrics import (
 from trademon.config import load_config
 from trademon.dashboard import humanize, journals, layout, price_view
 from trademon.data.storage import TIMEFRAME_MS
+from trademon.i18n import t
 from trademon.research.log import load_experiments
 
 st.set_page_config(page_title="TraDaemon", page_icon="👹💰", layout="wide")
@@ -38,15 +41,17 @@ cfg = load_config()
 runtime = cfg.paths.runtime_dir
 ACCENT, BH_COLOR, GOOD, BAD = "#2a78d6", "#c2c2c2", "#0ca30c", "#d03b3b"
 BH_FAIR_COLOR = "#5a5a5a"   # the like-for-like benchmark, so it reads stronger than the all-in one
-RANGES = {"7 dni": 7, "30 dni": 30, "Całość": None}
+# Window codes, not labels: the radio shows a translated caption but the lookup and
+# the session state stay language-independent.
+RANGES = {"7d": 7, "30d": 30, "all": None}
 
-# Chart series labels. The bot plays with only a part of the account, so the all-in
-# "buy & hold" is not a fair yardstick — both are drawn, the fair one more prominent.
-# Keep these short and differing from the first word: the legend truncates, and two
-# labels both starting "Kup i trzymaj…" render identically.
-S_BOT = "Twój portfel"
-S_BH_ALL = "Wszystko w rynku"
-S_BH_FAIR = "Tyle w rynku co bot"
+# Chart series labels, resolved per render because the legend is translated too. The
+# bot plays with only a part of the account, so the all-in "buy & hold" is not a fair
+# yardstick — both are drawn, the fair one more prominent. Keep the translations short
+# and differing from the first word: the legend truncates, and two labels sharing an
+# opening word render identically.
+def series_names() -> tuple[str, str, str]:
+    return t("chart.series.bot"), t("chart.series.bh_all"), t("chart.series.bh_fair")
 
 # The engine stores UTC and the container runs in UTC; render in the viewer's zone.
 try:
@@ -148,7 +153,7 @@ def matched_exposure_curve(equity_df: pd.DataFrame, initial: float) -> pd.DataFr
     Compounded per bar rather than scaled by one average, because one average is
     wrong the moment the risk settings change mid-flight. A book that ran at 30% for
     three weeks and then at 90% averages ~40%, which describes neither half — and the
-    average depends on the window, so switching 7 dni / 30 dni used to change the
+    average depends on the window, so switching 7 days / 30 days used to change the
     *benchmark* and not just the period. Here the shape inside any stretch of the
     curve is the same whichever window it is drawn in.
 
@@ -156,7 +161,7 @@ def matched_exposure_curve(equity_df: pd.DataFrame, initial: float) -> pd.DataFr
     candle close, so the exposure stamped on bar *t* already knows how that bar went.
     Multiplying it by bar *t*'s return would let the benchmark trade on the future.
 
-    Note that "Wynik od pieniędzy w grze" next to the chart still divides by the
+    Note that "return on money at work" next to the chart still divides by the
     window's *average* exposure (`return_on_risked_pct`) — a deliberately cruder
     approximation, so the two numbers are not meant to line up exactly.
     """
@@ -262,29 +267,32 @@ def config_change_marks(start, end) -> alt.Chart | None:
             .agg(zmiany=("field", lambda s: ", ".join(sorted(set(s))))))
     return alt.Chart(df).mark_rule(color=humanize.MUTED, strokeDash=[4, 4]).encode(
         x=alt.X("timestamp:T"),
-        tooltip=[alt.Tooltip("timestamp:T", title="Zmiana ustawień", format="%d.%m.%Y %H:%M"),
-                 alt.Tooltip("zmiany:N", title="Pola")],
+        tooltip=[alt.Tooltip("timestamp:T", title=t("chart.settings_change"),
+                             format="%d.%m.%Y %H:%M"),
+                 alt.Tooltip("zmiany:N", title=t("chart.fields"))],
     )
 
 
 def equity_chart(strat: pd.DataFrame, bh: pd.DataFrame,
                  bh_fair: pd.DataFrame | None = None) -> alt.Chart:
-    layers = [strat.assign(seria=S_BOT)[["timestamp", "equity", "seria"]]]
+    s_bot, s_bh_all, s_bh_fair = series_names()
+    value_title = t("chart.value")
+    layers = [strat.assign(seria=s_bot)[["timestamp", "equity", "seria"]]]
     if len(bh):
-        layers.append(bh.assign(seria=S_BH_ALL)[["timestamp", "equity", "seria"]])
+        layers.append(bh.assign(seria=s_bh_all)[["timestamp", "equity", "seria"]])
     if bh_fair is not None and len(bh_fair):
-        layers.append(bh_fair.assign(seria=S_BH_FAIR)[["timestamp", "equity", "seria"]])
+        layers.append(bh_fair.assign(seria=s_bh_fair)[["timestamp", "equity", "seria"]])
     data = pd.concat(layers, ignore_index=True)
     data["timestamp"] = to_local(data["timestamp"])
     lines = alt.Chart(data).mark_line().encode(
         x=alt.X("timestamp:T", title=None, axis=layout.time_axis()),
-        y=alt.Y("equity:Q", title="Wartość ($)", scale=alt.Scale(zero=False, nice=False)),
+        y=alt.Y("equity:Q", title=value_title, scale=alt.Scale(zero=False, nice=False)),
         color=alt.Color("seria:N", title=None, legend=layout.legend(),
-                        scale=alt.Scale(domain=[S_BOT, S_BH_ALL, S_BH_FAIR],
+                        scale=alt.Scale(domain=[s_bot, s_bh_all, s_bh_fair],
                                         range=[ACCENT, BH_COLOR, BH_FAIR_COLOR])),
-        tooltip=[alt.Tooltip("timestamp:T", title="Czas", format="%d.%m.%Y %H:%M"),
-                 alt.Tooltip("equity:Q", title="Wartość ($)", format=",.2f"),
-                 alt.Tooltip("seria:N", title="Seria")],
+        tooltip=[alt.Tooltip("timestamp:T", title=t("chart.time"), format="%d.%m.%Y %H:%M"),
+                 alt.Tooltip("equity:Q", title=value_title, format=",.2f"),
+                 alt.Tooltip("seria:N", title=t("chart.series"))],
     )
     marks = config_change_marks(data["timestamp"].min(), data["timestamp"].max())
     chart = alt.layer(lines, marks) if marks is not None else lines
@@ -304,19 +312,20 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
     # answers why the fair benchmark can sit far from the all-in one.
     now_at_work = (invested / eq * 100.0) if eq else 0.0
 
-    # 1) Ile masz
+    # 1) What you have
     top = st.columns([2, 3])
     with top[0]:
-        st.metric("Ile masz (wirtualne $)", humanize.money2(eq), f"{change:+.2f}% od startu")
-        st.caption(f"💵 wolne: {humanize.money2(cash)} · 📈 w grze: "
-                   f"{humanize.money2(invested)} (**{now_at_work:.0f}% pieniędzy**)  ·  "
-                   f"tryb **paper** (ćwiczebny, nie prawdziwe pieniądze)")
+        st.metric(t("home.you_have"), humanize.money2(eq),
+                  t("home.since_start", change=f"{change:+.2f}"))
+        st.caption(humanize.md(t("home.split", free=humanize.money2(cash),
+                                 invested=humanize.money2(invested),
+                                 pct=f"{now_at_work:.0f}")))
     # 2) status bota
     with top[1]:
         tf = state.get("timeframe", cfg.exchange.timeframe)
         status = humanize.bot_status(state.get("last_candle_ts", {}),
                                      TIMEFRAME_MS.get(tf, 0), datetime.now(UTC), DISPLAY_TZ)
-        st.markdown(f"### {status['emoji']} Status bota")
+        st.markdown(f"### {status['emoji']} {t('home.bot_status')}")
         st.markdown(status["text"])
         # The candle clock above is coarse by nature — on 4h bars it stays green
         # for hours after the exchange goes quiet. This line is the live one.
@@ -327,13 +336,15 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
         st.markdown(f"{conn['emoji']}&nbsp;<span style='color:{colour}'>{conn['text']}</span>",
                     unsafe_allow_html=True)
         if state.get("kill_switch"):
-            st.warning("🛑 Bezpiecznik dzienny włączony — bot nie otwiera teraz nowych pozycji.")
+            st.warning(t("home.kill_switch_on"))
 
     st.divider()
 
-    # 3) Jak to szło
-    st.subheader("Jak to szło")
-    rng_label = st.radio("Zakres", list(RANGES), horizontal=True, label_visibility="collapsed")
+    # 3) How it went
+    st.subheader(t("home.how_it_went"))
+    rng_label = st.radio(t("home.range"), list(RANGES), horizontal=True,
+                         format_func=lambda code: t(f"home.range.{code}"),
+                         label_visibility="collapsed")
     equity_df = with_live_point(equity_df, state)  # curve tracks 'Ile masz', not just closes
     win = window_df(equity_df, RANGES[rng_label])
     strat_eq = book_equity_series(win)
@@ -347,26 +358,19 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
         if len(bh_fair):
             bh_fair = bh_fair.assign(equity=bh_fair["equity"] * scale)
         st.altair_chart(equity_chart(strat_eq, bh, bh_fair), width="stretch")
-        st.caption(
-            f"Obie szare linie to ten sam rynek, kupiony i trzymany. **Jasna** wkłada w "
-            f"niego wszystkie pieniądze — bot łatwo bije ją w spadkach, ale nie dlatego, "
-            f"że jest mądry, tylko dlatego, że go tam nie było. **Ciemna** wkłada dokładnie "
-            f"tyle, ile w danej chwili miał w rynku bot, i to ona jest uczciwym "
-            f"porównaniem. W tym okresie trzymał w rynku średnio **{at_work:.0f}% "
-            f"pieniędzy** (teraz: **{now_at_work:.0f}%**) — im mniej, tym bliżej ciemna "
-            f"linia leży prostej gotówki i tym dalej od jasnej."
-        )
+        st.caption(t("home.benchmark_explainer", avg=f"{at_work:.0f}",
+                     now=f"{now_at_work:.0f}"))
         # The same result counted two ways: idle cash makes the first number look gentler.
         win_return = (strat_eq["equity"].iloc[-1] / strat_eq["equity"].iloc[0] - 1.0) * 100.0
         risked = return_on_risked_pct(win_return, at_work)
         c1, c2 = st.columns(2)
-        c1.metric("Wynik od wszystkich pieniędzy", f"{win_return:+.2f}%",
-                  help=humanize.GLOSSARY["wynik_calosc"])
-        c2.metric("Wynik od pieniędzy w grze",
+        c1.metric(t("metric.return_total"), f"{win_return:+.2f}%",
+                  help=humanize.glossary("return_total"))
+        c2.metric(t("metric.return_at_work"),
                   f"{risked:+.2f}%" if risked is not None else "—",
-                  help=humanize.GLOSSARY["wynik_w_grze"])
+                  help=humanize.glossary("return_at_work"))
     else:
-        st.info("Za mało danych na wykres — bot dopiero zaczyna zbierać historię.")
+        st.info(t("home.not_enough_data"))
 
     st.divider()
 
@@ -374,7 +378,7 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
     # Each instrument is clickable: the title opens its price chart below (hovering
     # shows the numbers). The choice is kept in session state rather than a popover,
     # which the 15s fragment refresh would keep closing — see price_view's docstring.
-    st.subheader("Co bot teraz trzyma")
+    st.subheader(t("home.holdings"))
     price_view.styles()
     positions = state.get("positions", {})
     last_close = state.get("last_close", {})
@@ -385,9 +389,9 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
     tooltip = price_view.tooltips(prices_for)
 
     if not positions:
-        st.info("Nic — bot czeka na okazję. 🕊️")
+        st.info(t("home.holdings.empty"))
     else:
-        st.caption("Kliknij instrument, aby zobaczyć jego kurs.")
+        st.caption(t("home.holdings.click"))
         cols = st.columns(min(len(positions), 3))
         for i, (sym, pos) in enumerate(positions.items()):
             card = humanize.position_card(pos, last_close.get(sym))
@@ -401,10 +405,10 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
 
     st.divider()
 
-    # 5) Dziennik zdarzeń
-    st.subheader("Dziennik zdarzeń")
+    # 5) Event log
+    st.subheader(t("home.events"))
     if len(alerts):
-        st.caption("Kliknij zdarzenie, aby zobaczyć kurs w tamtym momencie.")
+        st.caption(t("home.events.click"))
         # Sixty, not thirty: a book with five slots can close five positions and
         # open five more on one candle, so thirty rows is three candles — half a
         # day on 4h bars. A list that short gives the same "nothing older
@@ -425,7 +429,7 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
             else:
                 st.markdown(f"{e['emoji']} &nbsp;`{e['time']}` &nbsp; {e['text']}")
     else:
-        st.caption("Jeszcze nic się nie wydarzyło.")
+        st.caption(t("home.events.empty"))
 
 
 # ---------- detail tabs (unchanged logic, now behind an expander) ----------
@@ -433,95 +437,107 @@ def render_beginner(state: dict, equity_df: pd.DataFrame, trades: pd.DataFrame,
 def tab_metrics(equity_df: pd.DataFrame, trades: pd.DataFrame, state: dict) -> None:
     m = live_metrics(equity_df, trades, state.get("timeframe", cfg.exchange.timeframe))
     c = st.columns(4)
-    c[0].metric("Sharpe", f"{m.get('sharpe', 0):.2f}", help=humanize.GLOSSARY["Sharpe"])
-    c[1].metric("Max drawdown", f"{m.get('max_dd', 0):.2f}%",
-                help=humanize.GLOSSARY["Max drawdown"])
+    c[0].metric(t("metric.sharpe"), f"{m.get('sharpe', 0):.2f}",
+                help=humanize.glossary("sharpe"))
+    c[1].metric(t("metric.max_drawdown"), f"{m.get('max_dd', 0):.2f}%",
+                help=humanize.glossary("max_drawdown"))
     pf = m.get("profit_factor")
-    c[2].metric("Profit factor", f"{pf:.2f}" if pf not in (None, float("inf")) else "—",
-                help=humanize.GLOSSARY["Profit factor"])
-    c[3].metric("Win rate", f"{m['win_rate']:.0f}%" if "win_rate" in m else "—",
-                help=humanize.GLOSSARY["Win rate"])
+    c[2].metric(t("metric.profit_factor"),
+                f"{pf:.2f}" if pf not in (None, float("inf")) else "—",
+                help=humanize.glossary("profit_factor"))
+    c[3].metric(t("metric.win_rate"), f"{m['win_rate']:.0f}%" if "win_rate" in m else "—",
+                help=humanize.glossary("win_rate"))
     c2 = st.columns(4)
-    c2[0].metric("Pieniądze w grze", f"{m.get('at_work', 0):.0f}%",
-                 help=humanize.GLOSSARY["Pieniądze w grze"])
-    c2[1].metric("Czas w rynku", f"{m.get('in_market', 0):.0f}%",
-                 help=humanize.GLOSSARY["Czas w rynku"])
+    c2[0].metric(t("metric.money_at_work"), f"{m.get('at_work', 0):.0f}%",
+                 help=humanize.glossary("money_at_work"))
+    c2[1].metric(t("metric.time_in_market"), f"{m.get('in_market', 0):.0f}%",
+                 help=humanize.glossary("time_in_market"))
     risked = m.get("return_on_risked")
-    c2[2].metric("Wynik od pieniędzy w grze",
+    c2[2].metric(t("metric.return_at_work"),
                  f"{risked:+.2f}%" if risked is not None else "—",
-                 help=humanize.GLOSSARY["wynik_w_grze"])
+                 help=humanize.glossary("return_at_work"))
 
 
 def tab_analytics(trades: pd.DataFrame) -> None:
     if not len(trades):
-        st.caption("Jeszcze żadnych transakcji.")
+        st.caption(t("analytics.no_trades"))
         return
-    st.subheader("Wynik per para")
+    st.subheader(t("analytics.per_pair"))
+    # Aggregate under stable English names, then translate the headers on the way out:
+    # the frame is also what `layout.cards` and the styler address by column.
     per = trades.groupby("symbol").agg(
-        transakcje=("pnl", "count"),
+        trades=("pnl", "count"),
         win_rate=("pnl", lambda x: (x > 0).mean() * 100),
-        pnl_netto=("pnl", "sum"),
-        prowizje=("fees", "sum"),
-    ).reset_index().sort_values("pnl_netto", ascending=False)
+        net_pnl=("pnl", "sum"),
+        fees=("fees", "sum"),
+    ).reset_index().sort_values("net_pnl", ascending=False)
+    cols = {c: t(f"col.{c}") for c in ("symbol", "trades", "win_rate", "net_pnl", "fees")}
+    per = per.rename(columns=cols)
     if layout.is_mobile():
-        layout.cards(per, "symbol", ["pnl_netto", "win_rate", "transakcje"],
-                     {"pnl_netto": "+.2f", "win_rate": ".0f", "transakcje": ".0f"},
-                     color_by="pnl_netto")
+        layout.cards(per, cols["symbol"],
+                     [cols["net_pnl"], cols["win_rate"], cols["trades"]],
+                     {cols["net_pnl"]: "+.2f", cols["win_rate"]: ".0f",
+                      cols["trades"]: ".0f"},
+                     color_by=cols["net_pnl"])
     else:
         st.dataframe(
-            per.style.map(pnl_color, subset=["pnl_netto"]).format(
-                {"win_rate": "{:.0f}%", "pnl_netto": "{:+.2f}", "prowizje": "{:.2f}"}),
+            per.style.map(pnl_color, subset=[cols["net_pnl"]]).format(
+                {cols["win_rate"]: "{:.0f}%", cols["net_pnl"]: "{:+.2f}",
+                 cols["fees"]: "{:.2f}"}),
             width="stretch", hide_index=True)
 
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("Rozkład wyników transakcji")
+        st.subheader(t("analytics.pnl_distribution"))
         hist = alt.Chart(trades).mark_bar().encode(
-            x=alt.X("pnl:Q", bin=alt.Bin(maxbins=30), title="PnL (USDT)"),
-            y=alt.Y("count()", title="Liczba"),
+            x=alt.X("pnl:Q", bin=alt.Bin(maxbins=30), title=t("analytics.pnl_axis")),
+            y=alt.Y("count()", title=t("analytics.count")),
             color=alt.condition(alt.datum.pnl > 0, alt.value(GOOD), alt.value(BAD)),
         ).properties(height=layout.chart_height(240))
         st.altair_chart(hist, width="stretch")
     with col2:
-        st.subheader("Powody wyjścia")
+        st.subheader(t("analytics.exit_reasons"))
         if "exit_reason" in trades:
             reasons = trades["exit_reason"].value_counts().reset_index()
-            reasons.columns = ["powód", "liczba"]
+            reasons.columns = ["reason", "count"]
+            reasons["reason"] = reasons["reason"].map(humanize.exit_reason)
             bar = alt.Chart(reasons).mark_bar(color=ACCENT).encode(
-                x=alt.X("liczba:Q", title="Liczba"),
-                y=alt.Y("powód:N", title=None, sort="-x"),
+                x=alt.X("count:Q", title=t("analytics.count")),
+                y=alt.Y("reason:N", title=None, sort="-x"),
             ).properties(height=layout.chart_height(240))
             st.altair_chart(bar, width="stretch")
 
 
 def tab_model(state: dict) -> None:
-    st.subheader("Dlaczego bot (nie) handluje")
-    st.caption("Prawdopodobieństwo modelu i decyzja dla ostatniej świecy każdej pary. "
-               "Wejście, gdy prawdopodobieństwo ≥ próg.")
+    st.subheader(t("model.why"))
+    st.caption(t("model.why.help"))
     signals = state.get("signals", {})
     if not signals:
-        st.caption("Brak sygnałów — silnik jeszcze nie policzył prawdopodobieństw "
-                   "(do końca okna rozgrzewki).")
+        st.caption(t("model.no_signals"))
         return
+    c_pair, c_thr, c_dec = t("col.symbol"), t("col.threshold"), t("col.decision")
     rows = [{
-        "Para": sym, "p(long)": sig.get("p_long"), "Próg": sig.get("threshold"),
-        "Decyzja": humanize.REASON_PL.get(sig.get("reason", ""), sig.get("reason", "")),
+        c_pair: sym, "p(long)": sig.get("p_long"), c_thr: sig.get("threshold"),
+        c_dec: humanize.reason(sig.get("reason", "")),
     } for sym, sig in signals.items()]
     df = pd.DataFrame(rows).sort_values("p(long)", ascending=False, na_position="last")
     if layout.is_mobile():
-        layout.cards(df, "Para", ["p(long)", "Próg", "Decyzja"],
-                     {"p(long)": ".3f", "Próg": ".2f"})
+        layout.cards(df, c_pair, ["p(long)", c_thr, c_dec],
+                     {"p(long)": ".3f", c_thr: ".2f"})
     else:
-        st.dataframe(df.style.format({"p(long)": "{:.3f}", "Próg": "{:.2f}"}, na_rep="—"),
+        st.dataframe(df.style.format({"p(long)": "{:.3f}", c_thr: "{:.2f}"}, na_rep="—"),
                      width="stretch", hide_index=True)
 
 
 def tab_variants(books: dict[str, Path]) -> None:
-    st.subheader("Porównanie wariantów na żywo")
+    st.subheader(t("variants.title"))
     if len(books) < 2:
-        st.info("Brak wariantów A/B. Dodaj sekcję `variants:` w config.yaml, aby kilka "
-                "konfiguracji handlowało równolegle na tych samych danych.")
+        st.info(t("variants.none"))
     initial = cfg.paper.initial_capital
+    c_variant, c_equity, c_sharpe = t("col.variant"), t("col.equity"), t("metric.sharpe")
+    c_dd, c_at_work = t("col.max_dd_pct"), t("col.at_work_pct")
+    c_on_risked, c_win, c_trades = (t("col.return_on_risked_pct"), t("col.win_rate_pct"),
+                                    t("col.trades"))
     curves, metric_rows = [], []
     for name, bdir in books.items():
         state = load_state(bdir) or {}
@@ -532,39 +548,38 @@ def tab_variants(books: dict[str, Path]) -> None:
             curves.append(s.assign(wariant=name))
         m = live_metrics(eq_df, trades, state.get("timeframe", cfg.exchange.timeframe))
         metric_rows.append({
-            "Wariant": name, "Kapitał": state.get("equity", initial),
-            "Sharpe": m.get("sharpe"), "Max DD %": m.get("max_dd"),
-            "W grze %": m.get("at_work"), "Wynik od tego %": m.get("return_on_risked"),
-            "Win rate %": m.get("win_rate"), "Transakcje": len(trades),
+            c_variant: name, c_equity: state.get("equity", initial),
+            c_sharpe: m.get("sharpe"), c_dd: m.get("max_dd"),
+            c_at_work: m.get("at_work"), c_on_risked: m.get("return_on_risked"),
+            c_win: m.get("win_rate"), c_trades: len(trades),
         })
     if curves:
         data = pd.concat(curves, ignore_index=True)
         chart = alt.Chart(data).mark_line().encode(
             x=alt.X("timestamp:T", title=None, axis=layout.time_axis()),
-            y=alt.Y("equity:Q", title="Kapitał (USDT)", scale=alt.Scale(zero=False)),
-            color=alt.Color("wariant:N", title="Wariant", legend=layout.legend("Wariant")),
+            y=alt.Y("equity:Q", title=t("variants.equity_axis"), scale=alt.Scale(zero=False)),
+            color=alt.Color("wariant:N", title=c_variant, legend=layout.legend(c_variant)),
         ).properties(height=layout.chart_height(320))
         st.altair_chart(chart, width="stretch")
     metrics_df = pd.DataFrame(metric_rows)
     if layout.is_mobile():
         # Eight columns do not fit; equity, Sharpe and drawdown are what the A/B
         # comparison is actually for.
-        layout.cards(metrics_df, "Wariant", ["Kapitał", "Sharpe", "Max DD %", "Transakcje"],
-                     {"Kapitał": ",.2f", "Sharpe": ".2f", "Max DD %": ".2f",
-                      "Transakcje": ".0f"})
+        layout.cards(metrics_df, c_variant, [c_equity, c_sharpe, c_dd, c_trades],
+                     {c_equity: ",.2f", c_sharpe: ".2f", c_dd: ".2f", c_trades: ".0f"})
     else:
         st.dataframe(metrics_df.style.format(
-            {"Kapitał": "{:,.2f}", "Sharpe": "{:.2f}", "Max DD %": "{:.2f}",
-             "W grze %": "{:.0f}", "Wynik od tego %": "{:+.2f}",
-             "Win rate %": "{:.0f}"}, na_rep="—"), width="stretch", hide_index=True)
+            {c_equity: "{:,.2f}", c_sharpe: "{:.2f}", c_dd: "{:.2f}",
+             c_at_work: "{:.0f}", c_on_risked: "{:+.2f}",
+             c_win: "{:.0f}"}, na_rep="—"), width="stretch", hide_index=True)
 
 
 def tab_experiments() -> None:
-    st.subheader("Dziennik eksperymentów")
-    st.caption("Każdy backtest/sweep zapisany raz — żeby nie liczyć wielokrotnie tego samego.")
+    st.subheader(t("experiments.title"))
+    st.caption(t("experiments.help"))
     exps = load_experiments(runtime)
     if not exps:
-        st.caption("Pusto. Uruchom `python scripts/backtest.py`, aby dodać wpis.")
+        st.caption(t("experiments.empty"))
         return
     df = pd.json_normalize(exps).sort_values("timestamp", ascending=False)
     cols = [c for c in ["timestamp", "kind", "timeframe", "window_days", "pairs",
@@ -581,7 +596,7 @@ def tab_experiments() -> None:
 
 
 def tab_health(books: dict[str, Path]) -> None:
-    st.subheader("Zdrowie systemu")
+    st.subheader(t("health.title"))
     now = datetime.now(UTC)
     for name, bdir in books.items():
         state = load_state(bdir)
@@ -597,23 +612,25 @@ def tab_health(books: dict[str, Path]) -> None:
             if overdue_ms > bar_ms + 15 * 60_000:
                 stale.append(sym)
         cols = st.columns(4)
-        cols[0].metric(f"Wariant: {name}", "OK" if not stale else "UWAGA")
-        cols[1].metric("Kill-switch", "AKTYWNY" if state.get("kill_switch") else "nieaktywny",
-                       help=humanize.GLOSSARY["Kill-switch"])
-        cols[2].metric("Drawdown", f"{state.get('drawdown_pct', 0):.2f}%",
-                       help=humanize.GLOSSARY["Max drawdown"])
-        cols[3].metric("Ostatni stan", humanize._fmt_time(state.get("updated_at"), DISPLAY_TZ))
+        cols[0].metric(t("health.variant", name=name),
+                       t("health.ok") if not stale else t("health.attention"))
+        cols[1].metric(t("metric.kill_switch"),
+                       t("health.active") if state.get("kill_switch") else t("health.inactive"),
+                       help=humanize.glossary("kill_switch"))
+        cols[2].metric(t("metric.drawdown"), f"{state.get('drawdown_pct', 0):.2f}%",
+                       help=humanize.glossary("max_drawdown"))
+        cols[3].metric(t("health.last_state"),
+                       humanize._fmt_time(state.get("updated_at"), DISPLAY_TZ))
         if stale:
-            st.warning(f"[{name}] przeterminowane dane dla: {', '.join(stale)} "
-                       f"(silnik może nie przetwarzać świec)")
+            st.warning(t("health.stale_pairs", name=name, pairs=", ".join(stale)))
 
     status_path = runtime / "refresh_status.json"
     if status_path.exists():
         rs = json.loads(status_path.read_text())
-        st.caption(f"Refresher: {rs.get('status', '?')} @ {rs.get('timestamp', '?')} "
-                   f"— {rs.get('detail', '')}")
+        st.caption(t("health.refresher", status=rs.get("status", "?"),
+                     when=rs.get("timestamp", "?"), detail=rs.get("detail", "")))
 
-    st.subheader("Ostatnie alerty")
+    st.subheader(t("health.recent_alerts"))
     frames = [journals.load_jsonl(runtime / "alerts.jsonl")]
     frames += [journals.load_jsonl(bdir / "alerts.jsonl") for bdir in books.values()]
     alerts = pd.concat([f for f in frames if len(f)], ignore_index=True) if any(
@@ -622,20 +639,20 @@ def tab_health(books: dict[str, Path]) -> None:
         alerts = alerts.drop_duplicates().sort_values("timestamp", ascending=False).head(30)
         alert_cols = [c for c in ["timestamp", "kind", "message", "variant"] if c in alerts]
         if layout.is_mobile():
-            # Alerts already carry a Polish sentence; the timeline reads better than a grid.
+            # Alerts already carry a whole sentence; the timeline reads better than a grid.
             for rec in journals.records(alerts.head(layout.max_cards() * 2)):
                 e = humanize.event_line(rec, DISPLAY_TZ)
                 st.markdown(f"{e['emoji']} &nbsp;`{e['time']}` &nbsp; {e['text']}")
         else:
             st.dataframe(alerts[alert_cols], width="stretch", hide_index=True)
     else:
-        st.caption("Brak alertów.")
+        st.caption(t("health.no_alerts"))
 
 
 def render_crypto() -> None:
     books = discover_books()
     if not books:
-        st.info("Brak danych — uruchom silnik: `python -m trademon.engine`")
+        st.info(t("crypto.no_data"))
         return
 
     # pick the 'primary' book to show on the main screen
@@ -648,61 +665,88 @@ def render_crypto() -> None:
     alerts = journals.load_jsonl(book_dir / "alerts.jsonl")
 
     if len(names) > 1:
-        st.caption(f"Twój portfel: **{primary}** (pozostałe warianty w Szczegółach)")
+        st.caption(t("crypto.your_book", book=primary))
     render_beginner(state, equity_df, trades, alerts)
 
     # Desktop tabs switch client-side, but the mobile segmented control triggers a
     # rerun — which would slam the expander shut on every panel change. Reading the
     # control's stored value *before* the expander renders keeps it open once used.
     details_key = "crypto_details_panel"
-    with st.expander("🔬 Szczegóły dla dociekliwych",
+    with st.expander(t("crypto.details"),
                      expanded=bool(st.session_state.get(details_key))):
-        sel = st.selectbox("Księga (wariant)", names,
+        sel = st.selectbox(t("crypto.book_picker"), names,
                            index=names.index(primary)) if len(names) > 1 else primary
         d = books[sel]
         s_state = load_state(d) or {}
         s_eq = journals.load_jsonl(d / "equity.jsonl")
         s_tr = journals.load_jsonl(d / "trades.jsonl")
         tab_metrics(s_eq, s_tr, s_state)
+        # Keyed by code, labelled by translation: the mobile control stores its choice
+        # in session state, and a stored label would stop matching after a switch.
         panels = {
-            "Analityka": lambda: tab_analytics(s_tr),
-            "Model": lambda: tab_model(s_state),
-            "Warianty": lambda: tab_variants(books),
-            "Eksperymenty": tab_experiments,
-            "Zdrowie": lambda: tab_health(books),
+            "analytics": lambda: tab_analytics(s_tr),
+            "model": lambda: tab_model(s_state),
+            "variants": lambda: tab_variants(books),
+            "experiments": tab_experiments,
+            "health": lambda: tab_health(books),
         }
         if layout.is_mobile():
             # Five tabs in a row scroll off a 390px screen with no hint that more
             # exist; a segmented control wraps onto as many lines as it needs.
-            choice = st.segmented_control("Szczegóły", list(panels), default="Analityka",
+            choice = st.segmented_control(t("crypto.details"), list(panels),
+                                          default="analytics",
+                                          format_func=lambda c: t(f"panel.{c}"),
                                           label_visibility="collapsed", key=details_key)
-            panels[choice or "Analityka"]()
+            panels[choice or "analytics"]()
         else:
-            for tab, render_panel in zip(st.tabs(list(panels)), panels.values(),
-                                         strict=True):
+            labels = [t(f"panel.{code}") for code in panels]
+            for tab, render_panel in zip(st.tabs(labels), panels.values(), strict=True):
                 with tab:
                     render_panel()
 
 
 # ---------- app ----------
 
-# The module selector lives OUTSIDE the auto-refreshing fragment: switching it must
+# Both selectors live OUTSIDE the auto-refreshing fragment: switching either must
 # trigger a full rerun (a widget inside a run_every fragment would drop the change).
-st.title("TraDaemon 👹💰")
-# Here rather than per module: the deploy on the NAS rebuilds the image from git, and this
-# is the only way to tell from the browser whether the running container is the fresh one.
-st.caption(f"wersja {__version__}")
-MODULES = ["Krypto-scalper", "Zarządca portfela", "Badania", "Ustawienia"]
+def _pick_language() -> None:
+    """Seed the session's language, then let the viewer change it.
+
+    `?lang=` wins on the first run of a session so a link can carry the choice; after
+    that the widget owns the value. `display_language` from config.yaml is the
+    fallback, which is also what the engine and the printed reports use.
+    """
+    if i18n.SESSION_KEY not in st.session_state:
+        st.session_state[i18n.SESSION_KEY] = (
+            i18n.normalize(st.query_params.get("lang"))
+            or i18n.normalize(cfg.display_language)
+            or i18n.DEFAULT_LANG)
+    st.segmented_control(
+        "Language", list(i18n.LANGS), key=i18n.SESSION_KEY,
+        format_func=lambda code: t(f"lang.{code}"), label_visibility="collapsed")
+
+
+_head = st.columns([4, 1])
+with _head[1]:
+    _pick_language()
+with _head[0]:
+    st.title("TraDaemon 👹💰")
+    # Version here rather than per module: a deploy rebuilds the image from git, and this
+    # is the only way to tell from the browser whether the running container is the fresh one.
+    st.caption(f"{t('app.version')} {__version__} · {t('app.educational')}")
+
+MODULES = ["crypto", "portfolio", "research", "settings"]
 # segmented_control wraps onto several lines when the labels do not fit, where a
 # horizontal radio would overflow the viewport at 390px.
-_module = st.segmented_control("Moduł", MODULES, default=MODULES[0],
+_module = st.segmented_control(t("module.label"), MODULES, default=MODULES[0],
+                               format_func=lambda code: t(f"module.{code}"),
                                label_visibility="collapsed") or MODULES[0]
 
 
 @st.fragment(run_every=layout.refresh_interval())
 def render_live() -> None:
     """The two modules that hold positions — auto-refreshed."""
-    if _module == "Zarządca portfela":
+    if _module == "portfolio":
         from trademon.dashboard import portfolio_view
         portfolio_view.render()
     else:
@@ -710,12 +754,12 @@ def render_live() -> None:
 
 
 def render() -> None:
-    if _module == "Ustawienia":
+    if _module == "settings":
         # Writing config must never sit inside a run_every fragment: an auto-rerun
         # mid-edit would discard whatever is typed into the form.
         from trademon.dashboard import config_view
         config_view.render()
-    elif _module == "Badania":
+    elif _module == "research":
         # Studies produce a report, not a position: nothing here changes every 15s,
         # and auto-refresh would fight the buttons and the date input.
         from trademon.dashboard import research_view

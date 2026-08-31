@@ -29,7 +29,13 @@ import pandas as pd
 
 from trademon.backtest.book import run_book_backtest
 from trademon.config import load_config
-from trademon.research.lab import Window, buy_hold_pct, load_pairs, train_for_geometry
+from trademon.research.lab import (
+    Window,
+    buy_hold_pct,
+    load_pairs,
+    train_for_geometry,
+    window_frames,
+)
 from trademon.research.log import log_experiment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -46,31 +52,6 @@ ADD = ["DOT/USDT", "TRX/USDT", "ATOM/USDT", "BCH/USDT",
 # has to keep its own definition of what it is comparing.
 BASE = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
         "DOGE/USDT", "ADA/USDT", "LINK/USDT", "AVAX/USDT", "LTC/USDT"]
-
-
-def window_frames(pairs: dict[str, pd.DataFrame], window: Window,
-                  warmup_bars: int) -> tuple[dict[str, pd.DataFrame], pd.Timestamp]:
-    """Frames cut to warmup + window, and the timestamp trading may start at.
-
-    The pairs no longer share a row index once they are traded jointly, so the
-    warmup prefix is expressed as a timestamp rather than test_slice's integer.
-    """
-    out = {}
-    lo = hi = None
-    for symbol, df in pairs.items():
-        w_lo, w_hi = window.bounds(df)
-        lo = w_lo if lo is None else min(lo, w_lo)
-        hi = w_hi if hi is None else max(hi, w_hi)
-    for symbol, df in pairs.items():
-        idx = df.index[df["timestamp"] >= lo]
-        if not len(idx):
-            continue
-        start = max(0, int(idx[0]) - warmup_bars)
-        sub = df.iloc[start:]
-        sub = sub[sub["timestamp"] <= hi].reset_index(drop=True)
-        if len(sub) > warmup_bars:
-            out[symbol] = sub
-    return out, lo
 
 
 def main() -> int:
@@ -139,7 +120,7 @@ def main() -> int:
     df = pd.DataFrame(rows)
     print()
     print("=" * 92)
-    print("PLANSZA I PRZYDZIAŁ SLOTÓW — strict OOS, model trenowany osobno przed każdym oknem")
+    print("BOARD AND SLOT ALLOCATION — strict OOS, a model trained before each window")
     print("=" * 92)
     print(df.to_string(index=False, float_format=lambda v: f"{v:.2f}"))
 
@@ -153,7 +134,7 @@ def main() -> int:
                   bez_slotu=("slot_blocked", "sum"))
              .reset_index())
     print()
-    print("ŚREDNIA PO OKNACH")
+    print("AVERAGE ACROSS WINDOWS")
     print(agg.to_string(index=False, float_format=lambda v: f"{v:.2f}"))
     print("=" * 92)
 

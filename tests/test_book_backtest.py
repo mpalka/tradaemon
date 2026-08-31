@@ -133,6 +133,22 @@ def test_no_signal_no_trades(cfg):
     assert s["total_return_pct"] == pytest.approx(0.0)
 
 
+def test_trades_carry_the_probability_that_opened_them(cfg):
+    """Without this the journal cannot answer whether a confident signal was a
+    better trade than a barely-above-threshold one — the question any sizing-by-
+    conviction rests on. Two pairs the model likes differently, both with a slot."""
+    symbols = ["BTC/USDT", "ETH/USDT"]
+    frames = frames_for(symbols, 900)
+    cache = {"BTC/USDT": series_with(frames["BTC/USDT"], 0.60),
+             "ETH/USDT": series_with(frames["ETH/USDT"], 0.90)}
+    trades = run_book_backtest(frames, FakeBundle(), book_cfg(cfg, symbols, max_open=2),
+                               cache=dict(cache))["trades"]
+    assert len(trades) > 0
+    by_symbol = trades.groupby("symbol")["prob"]
+    assert by_symbol.get_group("BTC/USDT").eq(0.60).all()
+    assert by_symbol.get_group("ETH/USDT").eq(0.90).all()
+
+
 def test_maker_execution_is_refused(cfg):
     symbols = ["BTC/USDT"]
     c = book_cfg(cfg, symbols, max_open=1)

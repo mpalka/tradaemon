@@ -7,7 +7,9 @@ that pick which report to show and how its date is read.
 import pandas as pd
 import pytest
 
+from trademon import i18n
 from trademon.dashboard import research_view as rv
+from trademon.portfolio.correlation import VERDICT_KEYS
 
 
 def test_latest_picks_the_newest_report(tmp_path, monkeypatch):
@@ -49,7 +51,21 @@ def test_every_verdict_has_a_colour_and_an_explanation():
         classify(-0.85, -0.60, -12.0),
     }
     assert produced <= set(rv.VERDICT_STYLE)
-    assert produced <= set(rv.VERDICT_HELP)
+    assert produced <= set(VERDICT_KEYS)
+    # And every verdict must actually say something, in both languages — a token
+    # rendered with an empty explanation is the failure this test exists to stop.
+    for token in produced:
+        for lang in ("pl", "en"):
+            assert i18n.t_in(lang, f"verdict.{VERDICT_KEYS[token]}.label").strip()
+            assert i18n.t_in(lang, f"verdict.{VERDICT_KEYS[token]}.help").strip()
+
+
+def test_the_stored_verdict_token_is_not_translated():
+    """`models/reports/*.csv` written before 0.2.0 hold these exact tokens, and
+    `research_view` filters on them — translating the data would orphan every report."""
+    assert set(rv.VERDICT_STYLE) == {"KANDYDAT", "NIESTABILNY", "TRACI", "PUŁAPKA",
+                                     "SKORELOWANY"}
+    assert i18n.t_in("en", "verdict.candidate.label") == "CANDIDATE"
 
 
 def test_an_as_of_run_is_recorded_so_it_cannot_pose_as_current():

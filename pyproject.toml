@@ -1,8 +1,20 @@
 [project]
 name = "trademon"
 dynamic = ["version"]
-description = "ML-driven crypto scalping bot with paper trading"
+description = "Educational algorithmic-trading lab: an ML crypto scalper, an ETF rebalancer and a cross-sectional ranking study, all paper-traded. Not investment advice."
+readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["trading", "backtesting", "machine-learning", "paper-trading", "education"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Education",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
 dependencies = [
     "ccxt>=4.3",
     "pandas>=2.2",

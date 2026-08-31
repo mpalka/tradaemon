@@ -1,7 +1,7 @@
 """Price preview for a single instrument — the chart behind a click.
 
-Both beginner screens list instruments as sentences ("Kupił ETH za 100 $",
-"LTC/USDT zamknięto long"). Until now that was where the story ended: to see what
+Both beginner screens list instruments as sentences ("Bought ETH for $100",
+"LTC/USDT closed long"). Until now that was where the story ended: to see what
 the price actually did, you had to leave the panel. Clicking an instrument here
 opens its own price chart, with the bot's own fills drawn on it.
 
@@ -30,15 +30,18 @@ import streamlit as st
 from trademon.config import load_config
 from trademon.dashboard import humanize, layout
 from trademon.data import storage
+from trademon.i18n import t
 from trademon.portfolio import data as portfolio_data
 
 cfg = load_config()
 ACCENT, GOOD, BAD, MUTED = "#2a78d6", humanize.GOOD, humanize.BAD, humanize.MUTED
-RANGES = {"7 dni": 7, "30 dni": 30, "90 dni": 90}
-DEFAULT_RANGE = "30 dni"
+RANGES = {"7d": 7, "30d": 30, "90d": 90}
+DEFAULT_RANGE = "30d"
 PRICE_COLUMNS = ["timestamp", "close"]
 MARK_COLUMNS = ["timestamp", "price", "typ"]
-ENTRY, EXIT, HELD = "wejście", "wyjście", "trzyma nadal"
+# Stable codes, not labels: they are values in a DataFrame column and in Altair's
+# scale domain, and `render()` filters on HELD. Translated once, at the chart.
+ENTRY, EXIT, HELD = "entry", "exit", "held"
 
 _KEY = "price_preview"   # {"symbol", "section", "at"} or absent
 
@@ -117,14 +120,15 @@ def summary(df: pd.DataFrame) -> str:
     of that story.
     """
     if df is None or df.empty:
-        return "Brak zapisanych notowań tego instrumentu."
+        return t("price.no_quotes")
     tail = df.tail(SUMMARY_TAIL)
     ts = pd.to_datetime(tail["timestamp"], utc=True)
-    parts = [f"teraz {humanize.money2(float(tail['close'].iloc[-1]))}"]
-    for label, hours in (("24 h", 24), ("7 dni", 24 * 7)):
+    parts = [t("price.now", price=humanize.money2(float(tail["close"].iloc[-1])))]
+    for key, hours in (("price.span.24h", 24), ("price.span.7d", 24 * 7)):
         change = pct_change(tail, hours, ts=ts)
+        label = t(key)
         parts.append(f"{label} {change:+.1f}%" if change is not None else f"{label} —")
-    return " · ".join(parts) + "  \nKliknij, aby zobaczyć wykres kursu."
+    return " · ".join(parts) + "  \n" + t("price.click_for_chart")
 
 
 def tooltips(prices_for: Callable[[str], pd.DataFrame]) -> Callable[[str], str]:
@@ -176,7 +180,7 @@ def trade_points(trades: pd.DataFrame | None, symbol: str,
 
     Two journals, two shapes: the scalper writes a finished round trip per row
     (entry_time/exit_time), the portfolio manager one fill per row
-    (timestamp/side) — both end up as (timestamp, price, wejście/wyjście).
+    (timestamp/side) — both end up as (timestamp, price, entry/exit).
     """
     empty = pd.DataFrame(columns=MARK_COLUMNS)
     if trades is None or not len(trades) or "symbol" not in trades:
@@ -377,38 +381,43 @@ def _chart(prices: pd.DataFrame, marks: pd.DataFrame, entry_price: float | None,
         x=alt.X("timestamp:T", title=None, axis=layout.time_axis()),
         y=alt.Y("close:Q", title="Kurs ($)", scale=alt.Scale(zero=False, nice=False)),
         tooltip=[alt.Tooltip("timestamp:T", title="Czas", format="%d.%m.%Y %H:%M"),
-                 alt.Tooltip("close:Q", title="Kurs ($)", format=",.2f")],
+                 alt.Tooltip("close:Q", title=t("price.rate"), format=",.2f")],
     )]
 
     if entry_price:
         line = pd.DataFrame({"cena": [float(entry_price)]})
         layers.append(alt.Chart(line).mark_rule(color=MUTED, strokeDash=[4, 4]).encode(
             y=alt.Y("cena:Q"),
-            tooltip=[alt.Tooltip("cena:Q", title="Cena wejścia ($)", format=",.2f")]))
+            tooltip=[alt.Tooltip("cena:Q", title=t("price.entry_price"), format=",.2f")]))
 
     if at is not None:
         moment = pd.DataFrame({"chwila": [humanize.to_local(at, DISPLAY_TZ)]})
         layers.append(alt.Chart(moment).mark_rule(color=MUTED, strokeDash=[2, 3]).encode(
             x=alt.X("chwila:T"),
-            tooltip=[alt.Tooltip("chwila:T", title="To zdarzenie",
+            tooltip=[alt.Tooltip("chwila:T", title=t("price.this_event"),
                                  format="%d.%m.%Y %H:%M")]))
 
     if len(marks):
         pts = marks.copy()
         pts["timestamp"] = humanize.to_local(pts["timestamp"], DISPLAY_TZ)
-        scale = alt.Scale(domain=[ENTRY, EXIT, HELD], range=[GOOD, BAD, GOOD])
+        # The column holds codes; the legend needs words. Translate here, where the
+        # domain order is written down anyway, so colour and shape stay paired.
+        domain = [t(f"price.mark.{code}") for code in (ENTRY, EXIT, HELD)]
+        pts["typ"] = pts["typ"].map(dict(zip((ENTRY, EXIT, HELD), domain, strict=True)))
+        scale = alt.Scale(domain=domain, range=[GOOD, BAD, GOOD])
         # A circle for the open position rather than a third triangle: after a
         # close-and-reopen it lands on the same candle as the exit, a tenth of a
         # percent away in price, and two triangles there would read as one smudge.
-        shapes = alt.Scale(domain=[ENTRY, EXIT, HELD],
+        shapes = alt.Scale(domain=domain,
                            range=["triangle-up", "triangle-down", "circle"])
         layers.append(alt.Chart(pts).mark_point(size=80, filled=True, opacity=0.9).encode(
             x=alt.X("timestamp:T"), y=alt.Y("price:Q"),
             color=alt.Color("typ:N", title=None, scale=scale, legend=layout.legend()),
             shape=alt.Shape("typ:N", title=None, scale=shapes, legend=layout.legend()),
-            tooltip=[alt.Tooltip("typ:N", title="Bot"),
-                     alt.Tooltip("timestamp:T", title="Czas", format="%d.%m.%Y %H:%M"),
-                     alt.Tooltip("price:Q", title="Cena ($)", format=",.2f")]))
+            tooltip=[alt.Tooltip("typ:N", title=t("price.bot")),
+                     alt.Tooltip("timestamp:T", title=t("chart.time"),
+                                 format="%d.%m.%Y %H:%M"),
+                     alt.Tooltip("price:Q", title=t("price.price"), format=",.2f")]))
 
     return alt.layer(*layers).properties(height=layout.chart_height(240))
 
@@ -432,24 +441,24 @@ def render(section: str, prices_for: Callable[[str], pd.DataFrame],
 
     with st.container(border=True):
         head = st.columns([4, 1])
-        head[0].markdown(f"**📈 Kurs {symbol}**")
-        if head[1].button("✕ zamknij", key=f"{section}_close", type="tertiary"):
+        head[0].markdown(f"**📈 {t('price.chart_for', symbol=symbol)}**")
+        if head[1].button(t("price.close"), key=f"{section}_close", type="tertiary"):
             st.session_state[_KEY] = None
             st.rerun()
 
         prices = prices_for(symbol)
         if prices is None or prices.empty:
-            st.caption("Brak zapisanych notowań tego instrumentu — nie ma z czego "
-                       "narysować wykresu.")
+            st.caption(t("price.no_quotes_for_chart"))
             return
 
         names = list(RANGES)
-        rng = st.radio("Zakres kursu", names, index=names.index(DEFAULT_RANGE),
+        rng = st.radio(t("price.range"), names, index=names.index(DEFAULT_RANGE),
                        horizontal=True, label_visibility="collapsed",
+                       format_func=lambda code: t(f"price.range.{code}"),
                        key=f"{section}_range")
         win = window(prices, RANGES[rng], at)
         if len(win) < 2:
-            st.caption("Za mało notowań w tym zakresie.")
+            st.caption(t("price.too_few_quotes"))
             return
 
         pos = (positions or {}).get(symbol) or {}
@@ -459,11 +468,9 @@ def render(section: str, prices_for: Callable[[str], pd.DataFrame],
         st.altair_chart(_chart(win, marks, pos.get("entry_price"), at), width="stretch")
 
         change = (float(win["close"].iloc[-1]) / float(win["close"].iloc[0]) - 1.0) * 100.0
-        note = "Trójkąty to transakcje bota: ▲ kupno, ▼ sprzedaż. " if len(marks) else ""
+        note = t("price.note.triangles") if len(marks) else ""
         # Only explain the circle when one is on screen — a legend for a mark that
         # is not there reads as a mark the reader failed to find.
         if len(held):
-            note += "Kółko to pozycja, którą bot **nadal trzyma**. "
-        st.caption(f"Kurs samego instrumentu: **{change:+.1f}%** w wybranym zakresie "
-                   f"(to nie jest wynik bota — on trzymał tylko część konta i tylko "
-                   f"przez część tego czasu). {note}")
+            note += t("price.note.circle")
+        st.caption(t("price.instrument_change", change=f"{change:+.1f}", note=note))

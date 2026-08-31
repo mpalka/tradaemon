@@ -60,6 +60,9 @@ class PortfolioConfig(BaseModel):
     initial_capital: float = 10_000.0
     runtime_subdir: str = "portfolio"   # books live under runtime/portfolio/<name>/
     book_name: str = "core"             # the single default book's name
+    # Language for the alerts this module journals and sends to the webhook. Same
+    # meaning as `display_language` in config.yaml; see `trademon.i18n`.
+    display_language: str = "pl"
     bars_per_year: int = 252            # ETF trading days/year (Sharpe annualization)
 
     @property

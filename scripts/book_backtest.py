@@ -14,6 +14,7 @@ import logging
 
 import pandas as pd
 
+from trademon import i18n
 from trademon.backtest.book import render_book_report, run_book_backtest
 from trademon.config import load_config
 from trademon.models.train import load_bundles
@@ -44,6 +45,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config()
+    i18n.init(getattr(cfg, "display_language", None))
     if args.threshold is not None:
         cfg = cfg.model_copy(update={
             "strategy": cfg.strategy.model_copy(update={"prob_threshold": args.threshold})

@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
+from trademon import i18n
 from trademon.config import Config, config_path, load_config, overrides_path
 from trademon.config_store import restart_requested_at
 from trademon.data import storage
@@ -29,6 +30,7 @@ from trademon.engine.state import RuntimeStore
 from trademon.execution.executors import Executor
 from trademon.execution.fills import check_bracket_exit
 from trademon.features.engineering import compute_atr, compute_features
+from trademon.i18n import t_in
 from trademon.models.train import ModelBundle, load_bundles
 from trademon.risk.manager import RiskManager
 
@@ -74,6 +76,12 @@ class Position:
     deadline: datetime
     side: str = "long"     # "long" | "short"
     margin: float = 0.0    # cash set aside at entry (futures-style accounting)
+    # What the model said when this position was opened. Defaulted rather than
+    # required: books running on the NAS have open positions serialized in
+    # state.json from before this field existed, and a restart must not trip over
+    # its own saved state. Those positions close with prob=None, which is the
+    # truth about them — there is no way to recover a probability after the fact.
+    entry_prob: float | None = None
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -265,7 +273,7 @@ class Book:
         # writes the same value and the repeat is idempotent.
         if hasattr(self.executor, "costs"):
             self.executor.costs = self.cfg.costs
-        self.alert("config", "zmieniono ustawienia: " + ", ".join(changes), now)
+        self.alert("config", "alert.config", {"changes": ", ".join(changes)}, now)
 
     # ---------- state ----------
 
@@ -281,11 +289,29 @@ class Book:
         self._peak_equity = max(self._peak_equity, eq)
         return (eq / self._peak_equity - 1.0) * 100.0 if self._peak_equity else 0.0
 
-    def alert(self, kind: str, message: str, now: datetime, **extra) -> None:
+    def alert(self, kind: str, msg_key: str, params: dict, now: datetime,
+              **extra) -> None:
+        """Journal one event, in a form the panel can re-render in any language.
+
+        The record carries `msg_key` + `params` **and** a rendered `message`. The key
+        is what the dashboard uses, so the same outage reads in Polish or English
+        depending on who is looking. The rendered sentence is kept for two reasons:
+        the webhook and the log have no viewer to ask, and every line already written
+        by an earlier version has only that field — `humanize.event_line` falls back
+        to it, so a running deployment's history stays readable instead of turning
+        into a column of bare keys.
+        """
+        message = t_in(self._lang, msg_key, **params)
         self.store.append_alert({"timestamp": now.isoformat(), "kind": kind,
+                                 "msg_key": msg_key, "params": params,
                                  "message": message, "variant": self.name, **extra})
         log.info("[%s] ALERT [%s] %s", self.name, kind, message)
         send_webhook(self.cfg.alert_webhook_url, f"[{self.name}][{kind}] {message}")
+
+    @property
+    def _lang(self) -> str:
+        """The engine has no viewer, so the config decides what the webhook says."""
+        return i18n.normalize(self.cfg.display_language) or i18n.DEFAULT_LANG
 
     def restore(self) -> None:
         state = self.store.load_state()
@@ -350,7 +376,7 @@ class Book:
             # The preload drops the still-open candle, so this row *is* the last
             # closed one, by its open time — exactly what bot_status reasons about.
             # Without it the panel calls a freshly restarted, perfectly healthy bot
-            # "jeszcze nie odczytał rynku" until the next candle closes: four hours
+            # "has not read the market yet" until the next candle closes: four hours
             # of red light for nothing.
             self.last_candle_ts[symbol] = df["timestamp"].iloc[-1].isoformat()
 
@@ -396,15 +422,14 @@ class Book:
     def _check_risk_alerts(self, now: datetime) -> None:
         if self.risk.kill_switch_active(now, self.equity()):
             if not self._kill_alerted:
-                self.alert("kill_switch", "dzienny limit straty osiągnięty — "
-                           "nowe wejścia zablokowane", now)
+                self.alert("kill_switch", "alert.kill_switch", {}, now)
                 self._kill_alerted = True
         else:
             self._kill_alerted = False
         dd = self.drawdown_pct()
         if dd <= -self.cfg.risk.drawdown_alert_pct * 100.0:
             if not self._dd_alerted:
-                self.alert("drawdown", f"obsunięcie {dd:.1f}% od szczytu kapitału", now)
+                self.alert("drawdown", "alert.drawdown", {"dd": f"{dd:.1f}"}, now)
                 self._dd_alerted = True
         elif dd > -self.cfg.risk.drawdown_alert_pct * 50.0:
             self._dd_alerted = False
@@ -450,10 +475,16 @@ class Book:
             "entry_time": pos.entry_time.isoformat(), "exit_time": now.isoformat(),
             "qty": pos.qty, "entry_price": pos.entry_price, "exit_price": fill.price,
             "exit_reason": reason, "fees": pos.entry_fees + fill.fee, "pnl": pnl,
+            # see the note in backtest/book.py's close_position. On live books this
+            # is the version that will eventually answer the question on real
+            # trades rather than on a backtest.
+            "prob": pos.entry_prob,
         })
         log.info("[%s] %s: closed %s %s pnl=%.4f", self.name, symbol, pos.side, reason, pnl)
-        self.alert("trade_close", f"{symbol} zamknięto {pos.side} ({reason}) "
-                   f"PnL {pnl:+.2f} USDT", now, symbol=symbol, pnl=pnl, reason=reason)
+        self.alert("trade_close", "alert.trade_close",
+                   {"symbol": symbol, "side": pos.side, "reason": reason,
+                    "pnl": f"{pnl:+.2f}"},
+                   now, symbol=symbol, pnl=pnl, reason=reason)
 
     def _round_trip_cost(self, price: float) -> float:
         """What closing here and reopening on this same bar costs, in price units."""
@@ -504,9 +535,9 @@ class Book:
         pos.deadline = now + self._bar_delta * strat.horizon_bars
         log.info("[%s] %s: rolled over %s instead of %s (p=%.3f)",
                  self.name, symbol, pos.side, reason, prob)
-        self.alert("trade_rollover",
-                   f"{symbol} przedłużono {pos.side} @ {close:.2f} "
-                   f"(p={prob:.2f}, zamiast wyjścia {reason})",
+        self.alert("trade_rollover", "alert.trade_rollover",
+                   {"symbol": symbol, "side": pos.side, "price": f"{close:.2f}",
+                    "prob": f"{prob:.2f}", "reason": reason},
                    now, symbol=symbol, side=pos.side, prob=prob, reason=reason)
         return True
 
@@ -589,11 +620,13 @@ class Book:
             tp=fill.price + sign * strat.tp_atr_mult * atr_now,
             sl=fill.price - sign * strat.sl_atr_mult * atr_now,
             entry_time=now, deadline=now + self._bar_delta * strat.horizon_bars,
-            side=side, margin=fill.notional,
+            side=side, margin=fill.notional, entry_prob=prob,
         )
         log.info("[%s] %s: opened %s qty=%.6f @ %.2f (p=%.3f)",
                  self.name, symbol, side, qty, fill.price, prob)
-        self.alert("trade_open", f"{symbol} otwarto {side} @ {fill.price:.2f} (p={prob:.2f})",
+        self.alert("trade_open", "alert.trade_open",
+                   {"symbol": symbol, "side": side, "price": f"{fill.price:.2f}",
+                    "prob": f"{prob:.2f}"},
                    now, symbol=symbol, side=side, prob=prob)
 
 
@@ -633,20 +666,20 @@ class TradingEngine:
             log.info("%s: preloaded %d candles", symbol, len(df))
         return last_seen
 
-    def _alert_books(self, kind: str, message: str, **extra) -> None:
+    def _alert_books(self, kind: str, msg_key: str, params: dict, **extra) -> None:
         """Tell every book the same thing. Per book rather than to the shared journal
         because the beginner screen reads only the primary book's events, and a book
         whose journal never mentions an outage reads as a book that had nothing to say."""
         now = datetime.now(UTC)
         for book in self.books:
-            book.alert(kind, message, now, **extra)
+            book.alert(kind, msg_key, params, now, **extra)
 
     def _clear_connection_alert(self) -> None:
         """Close an outage the journal still has open — including one opened by a
         previous process.
 
-        Without this the newest line in the event log stays "brak połączenia z
-        giełdą" until something unrelated happens, and on 4h candles that can be
+        Without this the newest line in the event log stays "no contact with the
+        exchange" until something unrelated happens, and on 4h candles that can be
         hours away. The reader is then left to infer from silence whether the bot
         recovered or is still down — and silence looks far more like the latter.
         A container restart makes it worse, because the process that would have
@@ -660,8 +693,7 @@ class TradingEngine:
         for book in self.books:
             last = book.store.last_alert("connection")
             if last is not None and not last.get("ok", True):
-                book.alert("connection", "połączenie z giełdą wróciło — "
-                           "bot znowu czyta rynek", now, ok=True)
+                book.alert("connection", "alert.connection.back", {}, now, ok=True)
 
     async def _bootstrap_with_retry(self, rest_exchange) -> dict[str, pd.Timestamp | None]:
         """Preload candles, waiting the network out instead of dying on it.
@@ -691,8 +723,7 @@ class TradingEngine:
                     log.warning("startup: exchange still unreachable (attempt %d), "
                                 "retrying in %.0fs", fails, delay)
                 if fails == CONNECTION_ALERT_AFTER:
-                    self._alert_books("connection", "brak połączenia z giełdą — "
-                                      "ponawiam, na razie nie handluję", ok=False)
+                    self._alert_books("connection", "alert.connection.lost", {}, ok=False)
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, MAX_RETRY_SECONDS)
                 continue

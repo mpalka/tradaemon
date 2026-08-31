@@ -14,8 +14,10 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
+from trademon import i18n
 from trademon.engine.notify import send_webhook
 from trademon.engine.state import RuntimeStore
+from trademon.i18n import t_in
 from trademon.portfolio import allocator
 from trademon.portfolio.config import PortfolioConfig
 from trademon.portfolio.rebalance import settle_orders
@@ -56,11 +58,21 @@ class PortfolioBook:
     def weights(self) -> dict[str, float]:
         return allocator.current_weights(self.holdings, self.cash, self.last_close)
 
-    def alert(self, kind: str, message: str, now: datetime, **extra) -> None:
+    def alert(self, kind: str, msg_key: str, params: dict, now: datetime,
+              **extra) -> None:
+        """Journal one event. See `engine.loop.Book.alert` for why the record carries
+        both a key and a rendered sentence."""
+        message = t_in(self._lang, msg_key, **params)
         self.store.append_alert({"timestamp": now.isoformat(), "kind": kind,
+                                 "msg_key": msg_key, "params": params,
                                  "message": message, "book": self.name, **extra})
         log.info("[%s] ALERT [%s] %s", self.name, kind, message)
         send_webhook(self.cfg.alert_webhook_url, f"[{self.name}][{kind}] {message}")
+
+    @property
+    def _lang(self) -> str:
+        """No viewer here either — the config decides what the webhook says."""
+        return i18n.normalize(getattr(self.cfg, "display_language", None)) or i18n.DEFAULT_LANG
 
     def restore(self) -> None:
         state = self.store.load_state()
@@ -109,15 +121,15 @@ class PortfolioBook:
 
         if not self._initialized:
             self._rebalance(date, prices, "initial_allocation",
-                            "pierwsza alokacja koszyka")
+                            "alert.initial_allocation", {})
             self._initialized = True
         else:
             drift = allocator.max_drift_pct(
                 self.holdings, self.cash, prices, self.target_weights)
             days_since = (date - self.last_rebalance).days if self.last_rebalance else 10**9
             if allocator.should_rebalance(days_since, drift, self.cfg.rebalance):
-                self._rebalance(date, prices, "rebalance",
-                                f"rebalans do wag docelowych (drift {drift:.1f} pkt)")
+                self._rebalance(date, prices, "rebalance", "alert.rebalance",
+                                {"drift": f"{drift:.1f}"})
 
         self.store.append_equity({
             "timestamp": date.isoformat(), "equity": self.equity(), "cash": self.cash})
@@ -125,7 +137,7 @@ class PortfolioBook:
         self.persist(datetime.now(UTC))
 
     def _rebalance(self, date: datetime, prices: dict[str, float],
-                   kind: str, message: str) -> None:
+                   kind: str, msg_key: str, params: dict) -> None:
         orders = allocator.rebalance_orders(
             self.holdings, self.cash, prices, self.target_weights)
         if not orders and self._initialized:
@@ -135,14 +147,14 @@ class PortfolioBook:
         for t in trades:
             self.store.append_trade({**t, "timestamp": date.isoformat(), "kind": kind})
         self.last_rebalance = date
-        log.info("[%s] %s: %d transakcji, kapitał=%.2f",
+        log.info("[%s] %s: %d trades, equity=%.2f",
                  self.name, kind, len(trades), self.equity())
-        self.alert(kind, message, date, n_transactions=len(trades))
+        self.alert(kind, msg_key, params, date, n_transactions=len(trades))
 
     def _check_drawdown(self, date: datetime) -> None:
         dd = self.drawdown_pct()
         if dd <= -DRAWDOWN_ALERT_PCT and not self._dd_alerted:
-            self.alert("drawdown", f"obsunięcie {dd:.1f}% od szczytu wartości portfela", date)
+            self.alert("drawdown", "alert.portfolio_drawdown", {"dd": f"{dd:.1f}"}, date)
             self._dd_alerted = True
         elif dd > -DRAWDOWN_ALERT_PCT * 0.5:
             self._dd_alerted = False

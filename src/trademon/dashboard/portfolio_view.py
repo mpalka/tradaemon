@@ -17,11 +17,12 @@ import pandas as pd
 import streamlit as st
 
 from trademon.dashboard import humanize, journals, layout, price_view
+from trademon.i18n import t
 from trademon.portfolio.config import PortfolioConfig, load_portfolio_config
 from trademon.portfolio.data import load_panel
 
 ACCENT, BH_COLOR = "#2a78d6", "#999999"
-RANGES = {"1 rok": 365, "5 lat": 365 * 5, "Całość": None}
+RANGES = {"1y": 365, "5y": 365 * 5, "all": None}
 FRESH_DAYS = 4  # daily data over weekends/holidays — allow a few days before "stale"
 
 
@@ -68,7 +69,8 @@ def _window(df: pd.DataFrame, days: int | None) -> pd.DataFrame:
 
 
 def _chart(strat: pd.DataFrame, bench: pd.DataFrame) -> alt.Chart:
-    layers = [strat.assign(seria="Twój portfel")[["timestamp", "equity", "seria"]]]
+    s_bot, s_bh = t("chart.series.bot"), t("portfolio.series.bh")
+    layers = [strat.assign(seria=s_bot)[["timestamp", "equity", "seria"]]]
     if len(bench):
         layers.append(bench.assign(seria="Kup i trzymaj")[["timestamp", "equity", "seria"]])
     data = pd.concat(layers, ignore_index=True)
@@ -76,9 +78,9 @@ def _chart(strat: pd.DataFrame, bench: pd.DataFrame) -> alt.Chart:
         x=alt.X("timestamp:T", title=None,
                 axis=alt.Axis(format="%m.%Y", grid=False,
                               tickCount=4 if layout.is_mobile() else 6)),
-        y=alt.Y("equity:Q", title="Wartość ($)", scale=alt.Scale(zero=False, nice=False)),
+        y=alt.Y("equity:Q", title=t("chart.value"), scale=alt.Scale(zero=False, nice=False)),
         color=alt.Color("seria:N", title=None, legend=layout.legend(),
-                        scale=alt.Scale(domain=["Twój portfel", "Kup i trzymaj"],
+                        scale=alt.Scale(domain=[s_bot, s_bh],
                                         range=[ACCENT, BH_COLOR])),
     ).properties(height=layout.chart_height())
 
@@ -86,7 +88,7 @@ def _chart(strat: pd.DataFrame, bench: pd.DataFrame) -> alt.Chart:
 def _status(state: dict) -> dict:
     tss = state.get("last_candle_ts", {})
     if not tss:
-        return {"emoji": "🔴", "text": "brak danych — bot jeszcze nie ruszył"}
+        return {"emoji": "🔴", "text": t("portfolio.status.no_data")}
     latest = max(tss.values())
     try:
         age_days = (datetime.now(UTC) - datetime.fromisoformat(latest)).days
@@ -94,7 +96,7 @@ def _status(state: dict) -> dict:
         return {"emoji": "🔴", "text": "nieznany czas ostatnich danych"}
     when = str(latest)[:10]
     if age_days <= FRESH_DAYS:
-        return {"emoji": "🟢", "text": f"działa — dane z {when}"}
+        return {"emoji": "🟢", "text": t("portfolio.status.running", when=when)}
     return {"emoji": "🔴", "text": f"nie odpowiada — ostatnie dane z {when}"}
 
 
@@ -114,9 +116,9 @@ def _render_beginner(pcfg: PortfolioConfig, state: dict, equity_df: pd.DataFrame
         # Unlike the scalper, this module is in the market with everything it has —
         # so its result and its "kup i trzymaj" benchmark compare like with like.
         at_work = (invested / eq * 100.0) if eq else 0.0
-        st.caption(f"💵 gotówka: {humanize.money2(cash)} · 📊 w grze: "
-                   f"{humanize.money2(invested)} (**{at_work:.0f}% pieniędzy**)  ·  "
-                   f"tryb **paper** (ćwiczebny)")
+        st.caption(humanize.md(t("portfolio.split", cash=humanize.money2(cash),
+                                 invested=humanize.money2(invested),
+                                 pct=f"{at_work:.0f}")))
     with top[1]:
         stt = _status(state)
         st.markdown(f"### {stt['emoji']} Status bota")
@@ -126,8 +128,10 @@ def _render_beginner(pcfg: PortfolioConfig, state: dict, equity_df: pd.DataFrame
             st.caption(f"Ostatni rebalans: {str(last_reb)[:10]}")
 
     st.divider()
-    st.subheader("Jak to szło")
-    rng = st.radio("Zakres", list(RANGES), horizontal=True, label_visibility="collapsed")
+    st.subheader(t("home.how_it_went"))
+    rng = st.radio(t("home.range"), list(RANGES), horizontal=True,
+                   format_func=lambda code: t(f"portfolio.range.{code}"),
+                   label_visibility="collapsed")
     strat = _window(_equity_series(equity_df), RANGES[rng])
     if len(strat):
         bench = _window(benchmark_curve(pcfg), RANGES[rng])
@@ -136,11 +140,9 @@ def _render_beginner(pcfg: PortfolioConfig, state: dict, equity_df: pd.DataFrame
             scale = strat["equity"].iloc[0] / bench["equity"].iloc[0]
             bench = bench.assign(equity=bench["equity"] * scale)
         st.altair_chart(_chart(strat, bench), width="stretch")
-        st.caption("Niebieska nad szarą = rebalansowanie pomaga vs zwykłe trzymanie koszyka. "
-                   "Tu porównanie jest uczciwe z natury: obie linie mają w rynku "
-                   "wszystkie pieniądze.")
+        st.caption(t("portfolio.chart_explainer"))
     else:
-        st.info("Za mało danych na wykres — bot dopiero zaczyna.")
+        st.info(t("portfolio.not_enough_data"))
 
     st.divider()
     # Same click-to-see-the-price interaction as the crypto screen; the prices come
@@ -160,9 +162,9 @@ def _render_beginner(pcfg: PortfolioConfig, state: dict, equity_df: pd.DataFrame
     tooltip = price_view.tooltips(prices_for)
 
     if not active:
-        st.info("Jeszcze nic — bot czeka na pierwszą alokację.")
+        st.info(t("portfolio.no_allocation_yet"))
     else:
-        st.caption("Kliknij instrument, aby zobaczyć jego kurs.")
+        st.caption(t("home.holdings.click"))
         cols = st.columns(min(len(active), 3))
         for i, (sym, qty) in enumerate(active.items()):
             value = qty * last_close.get(sym, 0.0)
@@ -176,7 +178,7 @@ def _render_beginner(pcfg: PortfolioConfig, state: dict, equity_df: pd.DataFrame
         price_view.render("port_pos", prices_for, trades)
 
     st.divider()
-    st.subheader("Dziennik zdarzeń")
+    st.subheader(t("home.events"))
     if len(alerts):
         rows = journals.records(alerts.sort_values("timestamp", ascending=False).head(15))
         for n, rec in enumerate(rows):
@@ -191,7 +193,7 @@ def _render_beginner(pcfg: PortfolioConfig, state: dict, equity_df: pd.DataFrame
             else:
                 st.markdown(f"{e['emoji']} &nbsp;`{e['time']}` &nbsp; {e['text']}")
     else:
-        st.caption("Jeszcze nic się nie wydarzyło.")
+        st.caption(t("home.events.empty"))
 
 
 # ---------- detail tabs ----------
@@ -199,31 +201,33 @@ def _render_beginner(pcfg: PortfolioConfig, state: dict, equity_df: pd.DataFrame
 def _tab_allocation(state: dict, pcfg: PortfolioConfig) -> None:
     weights = state.get("weights", {})
     targets = state.get("target_weights", pcfg.base_weights)
+    now_label, target_label = t("portfolio.now"), t("portfolio.target")
     rows = []
     for s in pcfg.symbols:
-        rows.append({"Aktywo": s, "typ": "teraz", "waga": weights.get(s, 0.0) * 100})
-        rows.append({"Aktywo": s, "typ": "cel", "waga": targets.get(s, 0.0) * 100})
+        rows.append({"asset": s, "kind": now_label, "weight": weights.get(s, 0.0) * 100})
+        rows.append({"asset": s, "kind": target_label, "weight": targets.get(s, 0.0) * 100})
     df = pd.DataFrame(rows)
-    st.subheader("Waga teraz vs cel")
+    st.subheader(t("portfolio.weight_vs_target"))
     chart = alt.Chart(df).mark_bar().encode(
-        x=alt.X("waga:Q", title="% portfela"),
-        y=alt.Y("Aktywo:N", title=None),
-        color=alt.Color("typ:N", title=None,
-                        scale=alt.Scale(domain=["teraz", "cel"], range=[ACCENT, BH_COLOR])),
-        yOffset="typ:N",
+        x=alt.X("weight:Q", title=t("portfolio.pct_of_portfolio")),
+        y=alt.Y("asset:N", title=None),
+        color=alt.Color("kind:N", title=None,
+                        scale=alt.Scale(domain=[now_label, target_label],
+                                        range=[ACCENT, BH_COLOR])),
+        yOffset="kind:N",
     ).properties(height=(40 if layout.is_mobile() else 60) + 40 * len(pcfg.symbols))
     st.altair_chart(chart, width="stretch")
     drift = {s: (weights.get(s, 0.0) - targets.get(s, 0.0)) * 100 for s in pcfg.symbols}
     worst = max(drift.values(), key=abs, default=0.0) if drift else 0.0
-    st.caption(f"Największe odchylenie od planu (drift): {worst:+.1f} pkt proc. "
-               f"(rebalans przy ≥ {pcfg.rebalance.drift_threshold_pct:.0f} pkt "
-               f"lub co {pcfg.rebalance.cadence_days} dni).")
+    st.caption(t("portfolio.worst_drift", drift=f"{worst:+.1f}",
+                 threshold=f"{pcfg.rebalance.drift_threshold_pct:.0f}",
+                 days=pcfg.rebalance.cadence_days))
 
 
 def _tab_rebalances(trades: pd.DataFrame) -> None:
-    st.subheader("Historia rebalansów")
+    st.subheader(t("portfolio.rebalance_history"))
     if not len(trades):
-        st.caption("Jeszcze żadnych transakcji.")
+        st.caption(t("analytics.no_trades"))
         return
     df = trades.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.strftime("%Y-%m-%d")
@@ -235,17 +239,20 @@ def _tab_rebalances(trades: pd.DataFrame) -> None:
                      {"value": ",.2f"})
     else:
         st.dataframe(df, width="stretch", hide_index=True)
-    st.caption(f"Łącznie prowizji: {df['fee'].sum():.2f} $  ·  transakcji: {len(df)}")
+    st.caption(humanize.md(t("portfolio.fees_total",
+                             fees=humanize.money2(df["fee"].sum()), trades=len(df))))
 
 
 def _tab_health(state: dict, alerts: pd.DataFrame) -> None:
-    st.subheader("Zdrowie")
+    st.subheader(t("panel.health"))
     stt = _status(state)
     c = st.columns(3)
-    c[0].metric("Status danych", "OK" if stt["emoji"] == "🟢" else "UWAGA")
-    c[1].metric("Drawdown", f"{state.get('drawdown_pct', 0):.2f}%",
-                help=humanize.GLOSSARY["Max drawdown"])
-    c[2].metric("Ostatni stan", str(state.get("updated_at", "?"))[:19].replace("T", " "))
+    c[0].metric(t("portfolio.data_status"),
+                t("health.ok") if stt["emoji"] == "🟢" else t("health.attention"))
+    c[1].metric(t("metric.drawdown"), f"{state.get('drawdown_pct', 0):.2f}%",
+                help=humanize.glossary("max_drawdown"))
+    c[2].metric(t("health.last_state"),
+                str(state.get("updated_at", "?"))[:19].replace("T", " "))
     if len(alerts):
         recent = alerts.sort_values("timestamp", ascending=False).head(30)
         if layout.is_mobile():
@@ -264,11 +271,11 @@ def render() -> None:
     try:
         pcfg = load_portfolio_config()
     except FileNotFoundError:
-        st.info("Brak `config/portfolio.yaml` — moduł portfela nie jest skonfigurowany.")
+        st.info(t("portfolio.no_config"))
         return
     books = discover_books(pcfg)
     if not books:
-        st.info("Brak danych portfela — uruchom silnik: `python -m trademon.portfolio`")
+        st.info(t("portfolio.no_data"))
         return
 
     names = list(books)
@@ -280,27 +287,30 @@ def render() -> None:
     alerts = journals.load_jsonl(book_dir / "alerts.jsonl")
 
     basket = ", ".join(f"{k} {v:.0%}" for k, v in pcfg.base_weights.items())
-    st.caption(f"Koszyk: **{basket}** · rebalans co {pcfg.rebalance.cadence_days} dni "
-               f"lub przy drift ≥ {pcfg.rebalance.drift_threshold_pct:.0f} pkt · "
-               f"filtr trendu: {'włączony' if pcfg.trend.enabled else 'wyłączony'}")
+    st.caption(t("portfolio.basket", basket=basket, days=pcfg.rebalance.cadence_days,
+                 threshold=f"{pcfg.rebalance.drift_threshold_pct:.0f}",
+                 trend=t("cfg.bool.on" if pcfg.trend.enabled else "cfg.bool.off")))
     _render_beginner(pcfg, state, equity_df, alerts, trades)
 
     # See the note in app.py: the mobile segmented control reruns the script, so the
     # expander has to be told to stay open once a panel has been picked.
     details_key = "portfolio_details_panel"
-    with st.expander("🔬 Szczegóły dla dociekliwych",
+    with st.expander(t("crypto.details"),
                      expanded=bool(st.session_state.get(details_key))):
         panels = {
-            "Alokacja": lambda: _tab_allocation(state, pcfg),
-            "Rebalanse": lambda: _tab_rebalances(trades),
-            "Zdrowie": lambda: _tab_health(state, alerts),
+            "allocation": lambda: _tab_allocation(state, pcfg),
+            "rebalances": lambda: _tab_rebalances(trades),
+            "health": lambda: _tab_health(state, alerts),
         }
         if layout.is_mobile():
-            choice = st.segmented_control("Szczegóły", list(panels), default="Alokacja",
+            choice = st.segmented_control(t("crypto.details"), list(panels),
+                                          default="allocation",
+                                          format_func=lambda c: t(f"panel.{c}"),
                                           label_visibility="collapsed", key=details_key)
-            panels[choice or "Alokacja"]()
+            panels[choice or "allocation"]()
         else:
-            for tab, render_panel in zip(st.tabs(list(panels)), panels.values(),
+            labels = [t(f"panel.{code}") for code in panels]
+            for tab, render_panel in zip(st.tabs(labels), panels.values(),
                                          strict=True):
                 with tab:
                     render_panel()

@@ -1,21 +1,58 @@
-"""Tests for the beginner-dashboard translation layer (dashboard/humanize.py)."""
+"""Tests for the beginner-dashboard plain-language layer (dashboard/humanize.py)."""
 
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from trademon import i18n
 from trademon.dashboard import humanize
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 H4_MS = 4 * 3_600_000
 
 
-def test_reason_and_exit_maps():
-    assert humanize.REASON_PL["below_threshold"] == "nie widzi wystarczającej okazji"
-    assert humanize.REASON_PL["enter_long"].startswith("otwiera")
-    assert "zysk" in humanize.EXIT_PL["tp"]
-    assert "strat" in humanize.EXIT_PL["sl"]
+@pytest.fixture(autouse=True)
+def _polish(monkeypatch):
+    """Assert against Polish, the source language, whatever else the suite has set.
+
+    Importing the dashboard elsewhere leaves a language in `st.session_state`, and
+    these tests are about the wording, not about which catalogue is active.
+    """
+    monkeypatch.setattr(i18n, "_session_lang", lambda: None)
+    monkeypatch.setattr(i18n, "_default_lang", "pl")
+
+
+def test_reason_and_exit_sentences():
+    assert humanize.reason("below_threshold") == "nie widzi wystarczającej okazji"
+    assert humanize.reason("enter_long").startswith("otwiera")
+    assert "zysk" in humanize.exit_reason("tp")
+    assert "strat" in humanize.exit_reason("sl")
+    # An unknown code passes through rather than rendering as a bare catalogue key.
+    assert humanize.reason("something_new") == "something_new"
+
+
+def test_the_same_reason_reads_in_english_too(monkeypatch):
+    monkeypatch.setattr(i18n, "_default_lang", "en")
+    assert humanize.reason("below_threshold") == "does not see a good enough opportunity"
+    assert humanize.exit_reason("tp").startswith("at a profit")
+
+
+def test_an_alert_written_with_params_is_rendered_in_the_active_language(monkeypatch):
+    """The 0.2.0 journal format: `msg_key` + `params`, composed at display time."""
+    rec = {"kind": "drawdown", "timestamp": "2026-08-09T20:00:00+00:00",
+           "msg_key": "alert.drawdown", "params": {"dd": "-4.2"},
+           "message": "obsunięcie -4.2% od szczytu kapitału"}
+    assert humanize.event_line(rec)["text"] == "obsunięcie -4.2% od szczytu kapitału"
+    monkeypatch.setattr(i18n, "_default_lang", "en")
+    assert humanize.event_line(rec)["text"] == "down -4.2% from the equity peak"
+
+
+def test_a_journal_line_from_before_0_2_0_still_reads():
+    """Months of history on a running deployment carry only a rendered sentence."""
+    rec = {"kind": "drawdown", "timestamp": "2026-08-09T20:00:00+00:00",
+           "message": "obsunięcie -4.2% od szczytu kapitału"}
+    assert humanize.event_line(rec)["text"] == "obsunięcie -4.2% od szczytu kapitału"
 
 
 def test_event_line_uses_friendly_message():

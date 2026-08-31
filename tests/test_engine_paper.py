@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 
-from trademon.engine.loop import Book, TradingEngine
+from trademon.engine.loop import Book, Position, TradingEngine
 from trademon.engine.state import RuntimeStore
 from trademon.execution.executors import PaperExecutor
 
@@ -245,6 +245,42 @@ def test_state_restore_round_trip(engine, cfg, tmp_path):
     assert engine2.last_candle_ts == engine.last_candle_ts
 
 
+def test_a_position_saved_before_entry_prob_existed_still_restores(cfg, tmp_path):
+    """The NAS restart case: books have open positions serialized in state.json from
+    before the field existed, and a restart must not trip over its own saved state.
+    Those positions carry no probability, which is the truth about them."""
+    saved = {
+        "symbol": "BTC/USDT", "qty": 0.5, "entry_price": 100.0, "entry_fees": 0.05,
+        "tp": 110.0, "sl": 95.0, "side": "long", "margin": 50.0,
+        "entry_time": "2026-08-01T12:00:00+00:00",
+        "deadline": "2026-08-03T12:00:00+00:00",
+    }
+    pos = Position.from_json(saved)
+    assert pos.entry_prob is None
+    assert pos.qty == pytest.approx(0.5)
+    # and it survives another round trip, now with the field present
+    assert Position.from_json(pos.to_json()).entry_prob is None
+
+
+def test_journaled_trades_carry_the_probability_that_opened_them(engine, cfg):
+    """The live counterpart of the backtests' `prob` column: in a few months this is
+    what lets the question be asked of real trades rather than of a backtest."""
+    df = make_ohlcv(cfg.strategy.warmup_bars + 5)
+    feed(engine, df)
+    pos = engine.positions["BTC/USDT"]
+    assert pos.entry_prob == pytest.approx(0.99)
+    engine.bundles = {"long": FakeBundle(prob=0.0)}  # no re-entry after the close
+
+    last = df.iloc[-1]
+    engine.on_candle("BTC/USDT", {
+        "timestamp": last["timestamp"] + pd.Timedelta(minutes=1),
+        "open": last["close"], "high": pos.tp * 1.001, "low": last["close"] * 0.9999,
+        "close": pos.tp, "volume": 10.0,
+    })
+    trades = [json.loads(x) for x in engine.store.trades_path.read_text().splitlines()]
+    assert trades[-1]["prob"] == pytest.approx(0.99)
+
+
 def test_a_restored_book_persists_prices_it_never_saw_a_candle_for(engine, cfg):
     """The regression behind the missing buy&hold lines.
 
@@ -365,7 +401,7 @@ def test_an_outage_from_a_previous_container_is_closed_on_recovery(engine, cfg, 
     monkeypatch.setattr(loop_mod, "MAX_RETRY_SECONDS", 0.0)
 
     # what the previous container left behind, and nothing else
-    engine.alert("connection", "brak połączenia z giełdą", datetime.now(UTC), ok=False)
+    engine.alert("connection", "alert.connection.lost", {}, datetime.now(UTC), ok=False)
 
     fresh = Book("default", cfg, FakeBundle(), PaperExecutor(cfg), engine.store)
     eng = TradingEngine(cfg, FakeBundle(), PaperExecutor(cfg), books=[fresh])
@@ -373,6 +409,20 @@ def test_an_outage_from_a_previous_container_is_closed_on_recovery(engine, cfg, 
 
     alerts = [json.loads(x) for x in engine.store.alerts_path.read_text().splitlines()]
     assert alerts[-1]["kind"] == "connection" and alerts[-1]["ok"] is True
+
+
+def test_an_alert_carries_both_a_key_and_a_rendered_sentence(engine):
+    """0.2.0 changed the journal format. The key is what lets the panel render the
+    line in either language; the sentence is what the webhook sends and what every
+    line written before this version has instead."""
+    engine.alert("drawdown", "alert.drawdown", {"dd": "-4.2"}, datetime.now(UTC))
+    rec = json.loads(engine.store.alerts_path.read_text().splitlines()[-1])
+    assert rec["msg_key"] == "alert.drawdown"
+    assert rec["params"] == {"dd": "-4.2"}
+    assert rec["message"] == "obsunięcie -4.2% od szczytu kapitału"
+
+    from trademon.dashboard import humanize
+    assert humanize.event_line(rec)["text"] == rec["message"]
 
 
 def test_a_clean_start_does_not_invent_a_recovery(engine, cfg, monkeypatch):

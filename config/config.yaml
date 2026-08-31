@@ -27,6 +27,12 @@ exchange:
   # On 1m candles the median TP distance never clears round-trip costs.
   timeframe: 4h
 
+# Language for everything with no viewer attached: engine alerts, webhook messages and
+# printed reports. "pl" or "en"; an unknown value falls back to the default. Dashboard
+# viewers pick their own per session (top right, or ?lang=), so this does not constrain
+# them — it only decides what a headless process says.
+display_language: pl
+
 paths:
   data_dir: data
   models_dir: models
@@ -99,6 +105,31 @@ variants:
   - {name: prog_055, prob_threshold: 0.55}
   - {name: prog_050, prob_threshold: 0.50}
   - {name: prog_065, prob_threshold: 0.65}
+  # Added in 0.1.16 to settle a question the backtest cannot. The measurement in
+  # scripts/research/prob_calibration.py says the model's probability is worth
+  # something only near the top: at TP/SL 1.5/2.0 a trade needs 57.1% wins to break
+  # even, and over 6 windows x 120 days only signals above ~0.58 cleared it (60.5%
+  # and 63.9% in the top two quintiles, against 55.4 / 53.6 / 53.9 below).
+  #
+  # A strict-OOS sweep of the whole book agreed and put the payoff at +2.9 pp per
+  # window against 0.55, better in 5 windows of 6 — but with t = +1.0 under the
+  # engine's own fcfs allocation, because the windows differ from each other far
+  # more than the thresholds do (-15% to +25% at one and the same threshold). That
+  # is not a number to reconfigure the primary book on; it is a number to put in
+  # front of the market and watch. Hence a book rather than an edit.
+  #
+  # 0.60, not the sweep's argmax of 0.58: the two are +2.87 and +2.80 pp, a gap far
+  # inside the noise, so picking the higher one would be fitting the sweep. 0.60 is
+  # the code default in config.py, it sits evenly between the books either side of
+  # it, and it holds less: 55% of bars in the market against 82% at 0.55, and 30%
+  # fewer trades to pay fees on.
+  #
+  # What to watch: the sweep says the gain comes from losing less when the market
+  # falls (-8.3% -> -3.5% per window) rather than winning more when it rises
+  # (+13.3% -> +12.3%). If this book only ever ties in a bull run, that is the
+  # result, not a disappointment. Compare it against prog_055 on the same exposure,
+  # not against buy&hold — it is out of the market nearly half the time.
+  - {name: prog_060, prob_threshold: 0.60}
   # Risk-appetite A/B. Identical signal to prog_050 (the primary book) — only the
   # sizing differs: 5 x 20% = up to 100% of the account in the market, against
   # prog_050's 5 x 10% = 50%. Since 0.1.11 the two books share the same number of
@@ -113,7 +144,7 @@ variants:
   # day by day rather than argued on a chart.
   - {name: ryzyko_100, prob_threshold: 0.50, position_pct: 0.20, max_open_positions: 5}
 
-# Which book the beginner screen calls "Twój portfel". Pinned so the high-appetite
+# Which book the beginner screen calls "your portfolio". Pinned so the high-appetite
 # experiment above can never drift onto the main screen as if it were the portfolio;
 # it belongs in the Warianty comparison, where its cost is visible next to the others.
 primary_variant: prog_050

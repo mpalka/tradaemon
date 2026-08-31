@@ -13,6 +13,7 @@ import json
 
 import pytest
 
+from trademon import i18n
 from trademon.dashboard import config_view as cv
 from trademon.dashboard import journals
 
@@ -123,3 +124,23 @@ def test_book_states_finds_variants_and_skips_the_portfolio(tmp_path):
 def test_book_states_reads_a_single_book_runtime(tmp_path):
     (tmp_path / "state.json").write_text(json.dumps({"cash": 2.0}))
     assert journals.book_states(tmp_path) == {"default": {"cash": 2.0}}
+
+
+# ---------- the two things a translated screen could silently break ----------
+
+@pytest.mark.parametrize("path", cv.BOOL_CHOICES)
+@pytest.mark.parametrize("raw", [True, False])
+def test_a_boolean_field_round_trips_as_a_boolean(path, raw):
+    """Until 0.2.0 the Polish word *was* the encoding: `_parse` returned
+    `raw == "włączony"`, so an English label would have turned every save of these
+    fields into False. The widget now carries real booleans and translates only for
+    display, and this is the test that keeps it that way."""
+    field = cv.Field(path, "choice")
+    assert cv._parse(field, raw) is raw
+
+
+def test_a_boolean_field_is_labelled_in_both_languages():
+    for lang in ("pl", "en"):
+        assert i18n.t_in(lang, "cfg.bool.on").strip()
+        assert i18n.t_in(lang, "cfg.bool.off").strip()
+    assert i18n.t_in("pl", "cfg.bool.on") != i18n.t_in("en", "cfg.bool.on")

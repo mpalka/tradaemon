@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from trademon.backtest.metrics import max_drawdown, sharpe_ratio
+from trademon.i18n import t
 from trademon.portfolio import allocator
 from trademon.portfolio.config import PortfolioConfig
 from trademon.portfolio.rebalance import settle_orders
@@ -124,28 +125,26 @@ def render_portfolio_report(result: dict) -> str:
     s = result["summary"]
     beat = s["excess_return_pct"] > 0
     basket = ", ".join(f"{k} {v:.0%}" for k, v in s["target_weights"].items())
-    trend = "WŁĄCZONY" if s["trend_enabled"] else "wyłączony"
+    trend = t("report.trend.on" if s["trend_enabled"] else "report.trend.off")
     lines = [
-        "=" * 64, "TRADEMON — RAPORT PORTFELA (rebalanser)", "=" * 64,
-        (f"Okres: {s['period']['start']} .. {s['period']['end']} "
-         f"({s['period']['bars']} dni handlowych)"),
-        f"Koszyk: {basket}   filtr trendu: {trend}",
+        "=" * 64, t("report.portfolio.title"), "=" * 64,
+        t("report.portfolio.period", start=s["period"]["start"], end=s["period"]["end"],
+          bars=s["period"]["bars"]),
+        t("report.portfolio.basket", basket=basket, trend=trend),
         "-" * 64,
-        (f"  Strategia (rebalans):  {s['total_return_pct']:+.2f}%   "
-         f"CAGR {s['cagr_pct']:+.2f}%/rok   Sharpe {s['sharpe']:.2f}   "
-         f"max DD {s['max_drawdown_pct']:.2f}%"),
-        (f"  Benchmark (kup i trzymaj): {s['benchmark_return_pct']:+.2f}%   "
-         f"Sharpe {s['benchmark_sharpe']:.2f}   "
-         f"max DD {s['benchmark_max_drawdown_pct']:.2f}%"),
-        f"  Przewaga nad benchmarkiem: {s['excess_return_pct']:+.2f} pkt proc.",
-        f"  Zmienność (roczna): {s['volatility_pct']:.2f}%",
-        (f"  Rebalansów: {s['n_rebalances']}   transakcji: {s['n_transactions']}   "
-         f"prowizje: {s['fees_paid']:.2f}"),
+        t("report.portfolio.strategy", ret=f"{s['total_return_pct']:+.2f}",
+          cagr=f"{s['cagr_pct']:+.2f}", sharpe=f"{s['sharpe']:.2f}",
+          dd=f"{s['max_drawdown_pct']:.2f}"),
+        t("report.portfolio.benchmark", ret=f"{s['benchmark_return_pct']:+.2f}",
+          sharpe=f"{s['benchmark_sharpe']:.2f}",
+          dd=f"{s['benchmark_max_drawdown_pct']:.2f}"),
+        t("report.portfolio.excess", excess=f"{s['excess_return_pct']:+.2f}"),
+        t("report.portfolio.volatility", vol=f"{s['volatility_pct']:.2f}"),
+        t("report.portfolio.counts", rebalances=s["n_rebalances"],
+          trades=s["n_transactions"], fees=f"{s['fees_paid']:.2f}"),
         "-" * 64,
-        (f"WNIOSEK: rebalans {'POBIŁ' if beat else 'NIE pobił'} prostego trzymania "
-         "koszyka po kosztach."),
-        ("Uwaga: wartość rebalansu to dyscyplina i kontrola ryzyka, nie 'alfa'. "
-         "Wynik zależy od okresu; to narzędzie edukacyjne, nie porada inwestycyjna."),
+        t("report.portfolio.verdict.beat" if beat else "report.portfolio.verdict.missed"),
+        t("report.portfolio.caveat"),
         "=" * 64,
     ]
     return "\n".join(lines)

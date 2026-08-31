@@ -93,6 +93,23 @@ def test_backtest_long_short_trades_both_sides(cfg):
     assert s["gross_pnl"] - s["fees_paid"] == pytest.approx(s["net_pnl"])
 
 
+def test_short_trades_are_filed_under_the_short_probability(cfg):
+    """Both sides clear the threshold and the short one wins. The recorded
+    probability must be the short model's, not the long model's.
+
+    The long branch runs first and leaves its number behind; until the trade record
+    existed nothing read it afterwards, so a short could quietly be filed under
+    p_long. That would have inverted the very measurement this column is for.
+    """
+    cfg.strategy.direction = "long_short"
+    df = make_ohlcv(2000, seed=9)
+    bundles = {"long": FakeBundle(prob=0.65), "short": FakeBundle(prob=0.85)}
+    trades = run_backtest(df, bundles, cfg, "BTC/USDT")["trades"]
+    assert len(trades) > 0
+    assert (trades["side"] == "short").all()
+    assert trades["prob"].eq(0.85).all()
+
+
 def test_backtest_short_profits_in_falling_market(cfg):
     """A strongly falling series must be profitable for an always-short bot
     (gross of fees) and the accounting identity must hold."""

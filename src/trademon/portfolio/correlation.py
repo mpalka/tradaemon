@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from trademon.i18n import t
+
 MONTHS_PER_YEAR = 12
 ROLL_MONTHS = 36          # three years — long enough to span a regime, short enough to move
 MIN_MONTHS = 60           # below five years a correlation is not worth quoting
@@ -113,34 +115,61 @@ def screen(panel: pd.DataFrame, benchmark: str, years: int = 10,
     return pd.DataFrame(rows).sort_values("corr").reset_index(drop=True)
 
 
+# Stored token -> catalogue suffix. The tokens themselves are data: every CSV under
+# `models/reports/` already holds them, and both the panel and the screen script match
+# on them, so they are never translated — only these labels are.
+VERDICT_KEYS = {
+    "KANDYDAT": "candidate", "NIESTABILNY": "unstable", "TRACI": "loses",
+    "PUŁAPKA": "trap", "SKORELOWANY": "correlated",
+}
+
+
+def verdict_label(token: str) -> str:
+    """The word a reader sees for a stored verdict token."""
+    key = VERDICT_KEYS.get(token)
+    return t(f"verdict.{key}.label") if key else token
+
+
+def verdict_help(token: str) -> str:
+    """One line saying what that verdict means, and why it is not always good news."""
+    key = VERDICT_KEYS.get(token)
+    return t(f"verdict.{key}.help") if key else ""
+
+
 def summarize_screen(result: pd.DataFrame, benchmark: str) -> list[str]:
-    """The reading of the table, in plain Polish."""
+    """The reading of the table, in plain language.
+
+    The `verdict` column holds stored tokens (`KANDYDAT`, `PUŁAPKA`, …) that every
+    saved report already uses, so they are matched as data and never translated.
+    """
     if result.empty:
-        return ["Brak kandydatów z wystarczającą historią."]
+        return [t("screen.no_candidates")]
     negatives = result[result["corr"] < 0]
     keepers = result[result["verdict"] == "KANDYDAT"]
-    lines = [
-        f"Aktywów o UJEMNEJ korelacji z {benchmark}: {len(negatives)} z {len(result)}."
-    ]
+    lines = [t("screen.negatives", benchmark=benchmark, n=len(negatives),
+               total=len(result))]
     if negatives.empty:
-        lines.append("  Żadne — i to jest właśnie wynik: wśród sensownych aktywów")
-        lines.append("  ujemna korelacja z rynkiem światowym praktycznie nie istnieje.")
-        lines.append("  Realny cel to NISKA korelacja przy dodatnim zwrocie.")
+        lines.append(t("screen.none_negative.1"))
+        lines.append(t("screen.none_negative.2"))
+        lines.append(t("screen.none_negative.3"))
     if len(keepers):
-        best = ", ".join(f"{r.symbol} (kor. {r.corr:+.2f}, CAGR {r.cagr_pct:+.1f}%)"
+        best = ", ".join(t("screen.keeper", symbol=r.symbol, corr=f"{r.corr:+.2f}",
+                           cagr=f"{r.cagr_pct:+.1f}")
                          for r in keepers.itertuples())
-        lines.append(f"Przechodzą przesiew ({len(keepers)}): {best}")
+        lines.append(t("screen.keepers", n=len(keepers), names=best))
     else:
-        lines.append("Nic nie przechodzi przesiewu — żadne aktywo nie łączy niskiej")
-        lines.append("korelacji, jej stabilności i dodatniego zwrotu.")
+        lines.append(t("screen.no_keepers.1"))
+        lines.append(t("screen.no_keepers.2"))
     unstable = result[result["verdict"] == "NIESTABILNY"]
     if len(unstable):
-        names = ", ".join(f"{r.symbol} (do {r.roll_max:+.2f})"
+        names = ", ".join(t("screen.unstable_item", symbol=r.symbol,
+                            roll_max=f"{r.roll_max:+.2f}")
                           for r in unstable.itertuples())
-        lines.append(f"Nisko skorelowane ŚREDNIO, ale zawodzą w kryzysie: {names}")
+        lines.append(t("screen.unstable", names=names))
     traps = result[result["verdict"].isin(["PUŁAPKA", "TRACI"])]
     if len(traps):
-        names = ", ".join(f"{r.symbol} ({r.cagr_pct:+.1f}%/rok)"
+        names = ", ".join(t("screen.trap_item", symbol=r.symbol,
+                            cagr=f"{r.cagr_pct:+.1f}")
                           for r in traps.itertuples())
-        lines.append(f"Ujemny zwrot — balast, który topi łódź: {names}")
+        lines.append(t("screen.traps", names=names))
     return lines

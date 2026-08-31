@@ -31,6 +31,7 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from trademon.config import Config, deep_merge, load_config, load_raw_config, overrides_path
+from trademon.i18n import t
 
 HISTORY_FILENAME = "config_history.jsonl"
 RESTART_FLAG_FILENAME = "restart_requested"
@@ -193,9 +194,9 @@ def apply_changes(
     """
     forbidden = sorted(f for f in changes if f.split(".")[0] in FORBIDDEN_FIELDS)
     if forbidden:
-        raise ConfigWriteError(
-            f"Tych pól nie można zmieniać z panelu: {', '.join(forbidden)}"
-        )
+        # Rendered here rather than in the view: `ConfigWriteError` is also raised
+        # for callers with no screen, and a bare key would read as a crash there.
+        raise ConfigWriteError(t("store.forbidden_fields", fields=", ".join(forbidden)))
 
     defaults, overrides = load_raw_config(cfg_path)
     before = deep_merge(defaults, overrides)
@@ -254,7 +255,7 @@ def _humanize_validation_error(exc: ValidationError) -> str:
     for err in exc.errors():
         where = ".".join(str(p) for p in err["loc"]) or "config"
         lines.append(f"**{where}** — {err['msg']}")
-    return "Wartość odrzucona, nic nie zapisano:\n\n" + "\n\n".join(lines)
+    return t("store.value_rejected") + "\n\n" + "\n\n".join(lines)
 
 
 # ---------- change journal ----------

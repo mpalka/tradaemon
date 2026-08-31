@@ -13,6 +13,7 @@ import logging
 import numpy as np
 import pandas as pd
 
+from trademon import i18n
 from trademon.backtest.runner import render_html_report, render_report, run_backtest
 from trademon.config import load_config
 from trademon.data import storage
@@ -29,6 +30,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config()
+    i18n.init(getattr(cfg, "display_language", None))
     days = args.days or cfg.model.validation_days
     bundles = load_bundles(cfg.paths.models_dir)
 

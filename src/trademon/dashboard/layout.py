@@ -19,22 +19,34 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+from trademon.i18n import t
+
 # Tablets deliberately fall through to the desktop layout: at 768px+ the wide tables
 # and side legends are still readable, which is the whole reason for a breakpoint.
 _MOBILE_UA = re.compile(r"iPhone|iPod|Android.+Mobile|Windows Phone|BlackBerry", re.IGNORECASE)
 
 _OVERRIDE_KEY = "layout_override"
-_AUTO, _MOBILE, _DESKTOP = "auto", "telefon", "komputer"
+
+# Language-independent codes. `?layout=telefon` and `?layout=komputer` were the URL
+# contract before 0.2.0 and are documented in the README, so they keep working as
+# aliases — a bookmark must not stop working because the panel learned English.
+_AUTO, _MOBILE, _DESKTOP = "auto", "mobile", "desktop"
+_PARAM_ALIASES = {"telefon": _MOBILE, "komputer": _DESKTOP, "phone": _MOBILE,
+                  "auto": _AUTO, "mobile": _MOBILE, "desktop": _DESKTOP}
 
 GOOD, BAD, MUTED = "#0ca30c", "#d03b3b", "#999999"
 
 
 def _layout_param() -> str | None:
-    """`?layout=` from the URL, or None outside a script run (tests, bare imports)."""
+    """`?layout=` from the URL, or None outside a script run (tests, bare imports).
+
+    Returns the canonical code, so callers never see the Polish spellings.
+    """
     try:
-        return st.query_params.get("layout")
+        raw = st.query_params.get("layout")
     except Exception:  # noqa: BLE001 - no script run context
         return None
+    return _PARAM_ALIASES.get(str(raw).strip().lower()) if raw else None
 
 
 def _ua_is_mobile() -> bool:
@@ -47,9 +59,9 @@ def _ua_is_mobile() -> bool:
 def is_mobile() -> bool:
     """Query parameter wins, then the in-app switch, then the User-Agent.
 
-    `?layout=telefon` is there so the choice can be bookmarked — handy when the
+    `?layout=mobile` is there so the choice can be bookmarked — handy when the
     detection misses on a particular browser, and the only way to exercise the mobile
-    layout from a desktop browser.
+    layout from a desktop browser. `?layout=telefon` still works too.
     """
     param = _layout_param()
     if param in (_MOBILE, _DESKTOP):
@@ -66,14 +78,11 @@ def is_mobile() -> bool:
 def layout_switch() -> None:
     """Manual override, so both layouts can be checked from one device."""
     st.radio(
-        "Układ", [_AUTO, _MOBILE, _DESKTOP], key=_OVERRIDE_KEY, horizontal=True,
-        help="„auto\" rozpoznaje urządzenie po przeglądarce. Zmień, jeśli trafiło źle "
-             "albo chcesz zobaczyć drugi układ. Można też dopisać do adresu "
-             "`?layout=telefon`, żeby zapisać wybór w zakładce.",
+        t("layout.title"), [_AUTO, _MOBILE, _DESKTOP], key=_OVERRIDE_KEY, horizontal=True,
+        format_func=lambda code: t(f"layout.{code}"), help=t("layout.help"),
     )
     if _layout_param():
-        st.caption("Układ wymuszony parametrem `?layout` w adresie — "
-                   "przełącznik powyżej jest w tej chwili nieaktywny.")
+        st.caption(t("layout.forced_by_url"))
 
 
 # ---------- sizing ----------
@@ -160,7 +169,7 @@ def cards(
     for rec in shown:
         _card(rec, label_col, fields, formats, color_by)
     if hidden:
-        with st.expander(f"Pokaż pozostałe ({len(hidden)})"):
+        with st.expander(t("layout.show_rest", n=len(hidden))):
             for rec in hidden:
                 _card(rec, label_col, fields, formats, color_by)
 

@@ -31,27 +31,40 @@ from trademon import config_store
 from trademon.config import Config, config_path
 from trademon.dashboard import auth, humanize, journals, layout
 from trademon.data.storage import TIMEFRAME_MS
+from trademon.i18n import t
 from trademon.portfolio.config import PortfolioConfig
 from trademon.portfolio.config import _find_config_path as _portfolio_config_path
 
 HOT = "⚡"
 RESTART = "🔄"
 
-# Booleans shown as a Polish on/off selectbox rather than a bare True/False.
+# Booleans shown as an on/off selectbox rather than a bare True/False. The widget
+# carries the real booleans as its options and translates them only for display —
+# until 0.2.0 the Polish word *was* the encoding (`raw == "włączony"`), which meant a
+# translated label silently turned every save of these fields into False.
 BOOL_CHOICES = ("trend.enabled", "strategy.rollover")
 
 
 @dataclass
 class Field:
+    """One editable setting. The label and help text live in the message catalogues,
+    keyed off `path`, so a new language is a catalogue edit and not a form edit."""
     path: str
-    label: str
     kind: str                      # float | int | choice | symbols | text
-    help: str = ""
+    help_key: str | None = None    # override, for text shared with the glossary
     min: float | None = None
     max: float | None = None
     step: float | None = None
     fmt: str | None = None
     choices: list[str] | None = None
+
+    @property
+    def label(self) -> str:
+        return t(f"cfg.field.{self.path}.label")
+
+    @property
+    def help(self) -> str:
+        return t(self.help_key or f"cfg.field.{self.path}.help")
 
     @property
     def hot(self) -> bool:
@@ -62,108 +75,55 @@ class Field:
         return HOT if self.hot else RESTART
 
 
+# Sections are keyed by a stable code, never by their heading: the heading is
+# translated, and `_render_section` keys Streamlit widgets and the slot-queue special
+# case off this dict.
 CRYPTO_SECTIONS: dict[str, list[Field]] = {
-    "Strategia": [
-        Field("strategy.prob_threshold", "Próg pewności modelu", "float",
-              "Minimalne prawdopodobieństwo, przy którym bot otwiera pozycję. "
-              "Niżej = więcej transakcji i więcej prowizji.",
-              min=0.0, max=1.0, step=0.01, fmt="%.2f"),
-        Field("strategy.tp_atr_mult", "Take-profit (× ATR)", "float",
-              "Jak daleko od ceny wejścia ustawiany jest cel zysku, w jednostkach "
-              "zmienności (ATR).", min=0.1, max=10.0, step=0.1, fmt="%.1f"),
-        Field("strategy.sl_atr_mult", "Stop-loss (× ATR)", "float",
-              "Jak daleko ustawiany jest bezpiecznik. Mniej = szybciej ucina straty, "
-              "ale częściej wyrzuca z dobrej pozycji.",
-              min=0.1, max=10.0, step=0.1, fmt="%.1f"),
-        Field("strategy.horizon_bars", "Maksymalny czas trzymania (świece)", "int",
-              "Po tylu świecach pozycja zamyka się niezależnie od wyniku.",
-              min=1, max=500, step=1),
-        Field("strategy.rollover", "Przedłużanie po terminie", "choice",
-              "Gdy mija maksymalny czas trzymania, a model wciąż daje sygnał powyżej "
-              "progu, bot przedłuża pozycję (nowe widełki i termin) zamiast zamykać "
-              "i zaraz otwierać ją ponownie za podwójną prowizję.",
-              choices=["wyłączony", "włączony"]),
-        Field("strategy.atr_period", "Okres ATR", "int",
-              "Ile świec wstecz liczy się zmienność.", min=2, max=200, step=1),
-        Field("strategy.direction", "Kierunek", "choice",
-              "long = tylko zakłady na wzrost (zgodne ze spotem). long_short = także "
-              "zakłady na spadek; realne shorty wymagają konta futures.",
-              choices=["long", "long_short"]),
-        Field("strategy.warmup_bars", "Rozgrzewka (świece)", "int",
-              "Ile historii bot musi zebrać, zanim policzy cechy. Zmiana wymaga "
-              "restartu, bo od tego zależy rozmiar bufora świec.",
-              min=50, max=2000, step=10),
+    "strategy": [
+        Field("strategy.prob_threshold", "float", min=0.0, max=1.0, step=0.01, fmt="%.2f"),
+        Field("strategy.tp_atr_mult", "float", min=0.1, max=10.0, step=0.1, fmt="%.1f"),
+        Field("strategy.sl_atr_mult", "float", min=0.1, max=10.0, step=0.1, fmt="%.1f"),
+        Field("strategy.horizon_bars", "int", min=1, max=500, step=1),
+        Field("strategy.rollover", "choice"),
+        Field("strategy.atr_period", "int", min=2, max=200, step=1),
+        Field("strategy.direction", "choice", choices=["long", "long_short"]),
+        Field("strategy.warmup_bars", "int", min=50, max=2000, step=10),
     ],
-    "Ryzyko": [
-        Field("risk.position_pct", "Wielkość pozycji (część kapitału)", "float",
-              "Jaka część konta idzie w jedną pozycję. 0,10 = 10%.",
-              min=0.01, max=1.0, step=0.01, fmt="%.2f"),
-        Field("risk.max_open_positions", "Maksimum otwartych pozycji", "int",
-              "Razem z powyższym wyznacza maksymalną ekspozycję. Pary krypto są mocno "
-              "skorelowane, więc otwarte pozycje zwykle zachowują się podobnie. "
-              "Uwaga: ta zmiana działa niesymetrycznie — w górę wchodzi już przy "
-              "najbliższej świecy, w dół dopiero wtedy, gdy nadmiarowe pozycje same "
-              "się zamkną.",
-              min=1, max=20, step=1),
-        Field("risk.daily_loss_limit_pct", "Dzienny limit straty", "float",
-              humanize.GLOSSARY["Kill-switch"], min=0.005, max=0.5, step=0.005, fmt="%.3f"),
-        Field("risk.drawdown_alert_pct", "Próg alertu o obsunięciu", "float",
-              "Przy jakim spadku od szczytu kapitału panel ma ostrzegać.",
-              min=0.01, max=0.9, step=0.01, fmt="%.2f"),
+    "risk": [
+        Field("risk.position_pct", "float", min=0.01, max=1.0, step=0.01, fmt="%.2f"),
+        Field("risk.max_open_positions", "int", min=1, max=20, step=1),
+        Field("risk.daily_loss_limit_pct", "float", help_key="glossary.kill_switch",
+              min=0.005, max=0.5, step=0.005, fmt="%.3f"),
+        Field("risk.drawdown_alert_pct", "float", min=0.01, max=0.9, step=0.01, fmt="%.2f"),
     ],
-    "Koszty": [
-        Field("costs.taker_fee", "Prowizja taker", "float",
-              "Prowizja od zleceń rynkowych. Binance spot domyślnie 0,001 = 0,1%.",
-              min=0.0, max=0.01, step=0.0001, fmt="%.4f"),
-        Field("costs.maker_fee", "Prowizja maker", "float",
-              "Prowizja od zleceń limit czekających w księdze.",
-              min=0.0, max=0.01, step=0.0001, fmt="%.4f"),
-        Field("costs.slippage_bps", "Poślizg (punkty bazowe)", "float",
-              "Zakładane niekorzystne odchylenie ceny wykonania. 2 bps = 0,02%.",
-              min=0.0, max=50.0, step=0.5, fmt="%.1f"),
+    "costs": [
+        Field("costs.taker_fee", "float", min=0.0, max=0.01, step=0.0001, fmt="%.4f"),
+        Field("costs.maker_fee", "float", min=0.0, max=0.01, step=0.0001, fmt="%.4f"),
+        Field("costs.slippage_bps", "float", min=0.0, max=50.0, step=0.5, fmt="%.1f"),
     ],
-    "Rynek i kapitał": [
-        Field("exchange.timeframe", "Interwał świecy", "choice",
-              "Co ile bot podejmuje decyzję. Zmiana wymaga restartu i unieważnia "
-              "model wytrenowany na innym interwale.", choices=list(TIMEFRAME_MS)),
-        Field("exchange.symbols", "Pary", "symbols",
-              "Lista par oddzielona przecinkami. Model kosztów jest uczciwy dla par "
-              "o dużej płynności; cieńsze będą handlować gorzej niż backtest sugeruje."),
-        Field("paper.initial_capital", "Kapitał startowy (paper)", "float",
-              "Dotyczy nowych ksiąg. Istniejące księgi trzymają swój stan w state.json "
-              "i nie zmienią salda po tej edycji.", min=10.0, max=1_000_000.0, step=100.0,
+    "market": [
+        Field("exchange.timeframe", "choice", choices=list(TIMEFRAME_MS)),
+        Field("exchange.symbols", "symbols"),
+        Field("paper.initial_capital", "float", min=10.0, max=1_000_000.0, step=100.0,
               fmt="%.2f"),
-        Field("primary_variant", "Księga na ekranie głównym", "choice",
-              "Który wariant A/B panel nazywa „Twoim portfelem\"."),
+        Field("primary_variant", "choice"),
     ],
-    "Trenowanie": [
-        Field("model.train_window_days", "Okno treningowe (dni)", "int",
-              "Ile historii trafia do treningu. Ustawia też okno cotygodniowego "
-              "pobierania danych, więc mała wartość po cichu ogranicza zbierane dane.",
-              min=30, max=4000, step=10),
-        Field("model.validation_days", "Okno walidacji (dni)", "int",
-              "Ile dni z końca każdego foldu służy do oceny.", min=7, max=365, step=1),
-        Field("model.n_folds", "Liczba foldów", "int",
-              "Ile kroków walidacji kroczącej (walk-forward).", min=2, max=20, step=1),
+    "training": [
+        Field("model.train_window_days", "int", min=30, max=4000, step=10),
+        Field("model.validation_days", "int", min=7, max=365, step=1),
+        Field("model.n_folds", "int", min=2, max=20, step=1),
     ],
 }
 
 PORTFOLIO_SECTIONS: dict[str, list[Field]] = {
-    "Portfel": [
-        Field("initial_capital", "Kapitał startowy", "float",
-              "Dotyczy nowej księgi portfela.", min=100.0, max=10_000_000.0, step=100.0,
+    "portfolio": [
+        Field("initial_capital", "float", min=100.0, max=10_000_000.0, step=100.0,
               fmt="%.2f"),
-        Field("rebalance.cadence_days", "Rebalans co (dni)", "int",
-              "Najrzadszy dopuszczalny rytm przywracania proporcji.",
-              min=1, max=730, step=1),
-        Field("rebalance.drift_threshold_pct", "Próg driftu (pkt proc.)", "float",
-              humanize.GLOSSARY["Drift"], min=0.5, max=50.0, step=0.5, fmt="%.1f"),
-        Field("trend.enabled", "Filtr trendu", "choice",
-              "Gdy włączony, aktywo poniżej swojej średniej trafia do aktywa "
-              "bezpiecznego. To premia za ryzyko, nie darmowy obiad.",
-              choices=["wyłączony", "włączony"]),
-        Field("trend.ma_days", "Średnia dla filtru trendu (dni)", "int",
-              "Klasycznie 200 sesji.", min=20, max=500, step=10),
+        Field("rebalance.cadence_days", "int", min=1, max=730, step=1),
+        Field("rebalance.drift_threshold_pct", "float", help_key="glossary.drift",
+              min=0.5, max=50.0, step=0.5, fmt="%.1f"),
+        Field("trend.enabled", "choice"),
+        Field("trend.ma_days", "int", min=20, max=500, step=10),
     ],
 }
 
@@ -219,23 +179,22 @@ def book_slots(states: dict[str, dict]) -> list[BookSlots]:
 def slot_lines(slots: list[BookSlots]) -> list[str]:
     """One sentence per book: how full it is, and what a free slot would cost.
 
-    The queue count sits after a colon rather than in a phrase, the same dodge
-    `humanize._ago` uses: "2 pary czekają" and "5 par czeka" is a declension rule this
-    line does not need to know.
+    The queue count sits after a colon rather than inside a phrase, the same dodge
+    `humanize._ago` uses: "2 pary czekają" vs "5 par czeka" is a declension rule this
+    line does not need to know, in Polish or in any other language.
     """
     lines = []
     for s in slots:
-        head = f"**{s.name}** · {s.taken} z {s.cap} miejsc zajętych"
+        head = t("cfg.slots.head", book=s.name, taken=s.taken, cap=s.cap)
         if s.queued:
-            top = f" (najwyżej {s.top_p:.2f})".replace(".", ",") if s.top_p is not None else ""
-            lines.append(f"{head}, w kolejce z sygnałem: **{s.queued}**{top}. Każde "
-                         f"miejsce więcej to jedna pozycja przy najbliższej świecy, "
-                         f"po {s.position_pct:.0%} konta.")
+            top = (t("cfg.slots.top_p", p=humanize.dec(f"{s.top_p:.2f}"))
+                   if s.top_p is not None else "")
+            lines.append(t("cfg.slots.queued", head=head, queued=s.queued, top=top,
+                           pct=f"{s.position_pct:.0%}"))
         elif s.free:
-            lines.append(f"{head} — w kolejce nikt nie czeka, więc podniesienie limitu "
-                         f"nic dziś nie zmieni.")
+            lines.append(t("cfg.slots.free", head=head))
         else:
-            lines.append(f"{head} — książka pełna, ale żadna para nie przekracza progu.")
+            lines.append(t("cfg.slots.full", head=head))
     return lines
 
 
@@ -273,9 +232,14 @@ def _widget(f: Field, current: Any, key: str) -> Any:
                                max_value=int(f.max), step=int(f.step),
                                help=f.help, key=key)
     if f.kind == "choice":
-        choices = f.choices or []
         if f.path in BOOL_CHOICES:
-            current = "włączony" if current else "wyłączony"
+            # Real booleans as the option values, translated only on the way to the
+            # screen, so `_parse` has nothing to decode back.
+            return st.selectbox(
+                label, [False, True], index=int(bool(current)),
+                format_func=lambda on: t("cfg.bool.on" if on else "cfg.bool.off"),
+                help=f.help, key=key)
+        choices = f.choices or []
         idx = choices.index(current) if current in choices else 0
         return st.selectbox(label, choices, index=idx, help=f.help, key=key)
     if f.kind == "symbols":
@@ -292,7 +256,7 @@ def _parse(f: Field, raw: Any) -> Any:
     if f.kind == "float":
         return float(raw)
     if f.path in BOOL_CHOICES:
-        return raw == "włączony"
+        return bool(raw)
     return raw
 
 
@@ -313,27 +277,28 @@ def effective_values(effective: dict, model_cls: type) -> dict:
 
 
 def _render_section(
-    title: str, fields: list[Field], cfg_path: Path, runtime_dir: Path,
+    section: str, fields: list[Field], cfg_path: Path, runtime_dir: Path,
     effective: dict, overrides: dict, model_cls: type, scope: str,
 ) -> None:
+    title = t(f"cfg.section.{section}")
     overridden = [f.path for f in fields if config_store.get_path(overrides, f.path) is not None]
-    header = f"{title} ({len(overridden)} zmienionych)" if overridden else title
+    header = t("cfg.section.changed", title=title, n=len(overridden)) if overridden else title
 
     defaults_filled = effective_values(effective, model_cls)
     with st.expander(header, expanded=bool(overridden)):
         # Said before the fields, not after the save: a form does not re-run while you
         # type, so the screen cannot react to the number being entered — but it can say
         # what the current one is already holding back.
-        if scope == "crypto" and title == "Ryzyko":
+        if scope == "crypto" and section == "risk":
             _render_slot_queue(runtime_dir)
-        with st.form(f"form_{scope}_{title}"):
+        with st.form(f"form_{scope}_{section}"):
             values: dict[str, Any] = {}
             for f in fields:
                 current = config_store.get_path(defaults_filled, f.path)
                 if f.path == "primary_variant":
                     f.choices = [v.get("name") for v in effective.get("variants", [])] or ["—"]
                 values[f.path] = _widget(f, current, key=f"{scope}.{f.path}")
-            saved = st.form_submit_button("Zapisz", type="primary")
+            saved = st.form_submit_button(t("cfg.save"), type="primary")
 
         if saved:
             changes = {}
@@ -341,22 +306,22 @@ def _render_section(
                 try:
                     changes[f.path] = _parse(f, values[f.path])
                 except (TypeError, ValueError):
-                    st.error(f"Nie rozumiem wartości pola „{f.label}\".")
+                    st.error(t("cfg.error.bad_value", field=f.label))
                     return
             if raised := ceiling_change(defaults_filled, changes):
                 _ceiling_dialog(cfg_path, runtime_dir, changes, model_cls, scope, raised)
             else:
                 _apply(cfg_path, runtime_dir, changes, model_cls, scope)
 
-        if overridden and st.button(f"Przywróć domyślne w „{title}\"",
-                                    key=f"reset_{scope}_{title}"):
+        if overridden and st.button(t("cfg.reset_section", title=title),
+                                    key=f"reset_{scope}_{section}"):
             _apply(cfg_path, runtime_dir, dict.fromkeys(overridden), model_cls, scope)
 
 
 def _apply(cfg_path: Path, runtime_dir: Path, changes: dict,
            model_cls: type, scope: str) -> None:
     if not auth.can_write():
-        st.error("Brak uprawnień do zmiany ustawień.")
+        st.error(t("cfg.error.no_permission"))
         return
     try:
         report = config_store.apply_changes(
@@ -367,7 +332,7 @@ def _apply(cfg_path: Path, runtime_dir: Path, changes: dict,
         return
 
     if not report.changed:
-        st.info("Nic się nie zmieniło.")
+        st.info(t("cfg.nothing_changed"))
         return
     # st.rerun() throws away everything this run has drawn, so a message written here
     # is never painted — the save looked like a click into the void, which is what
@@ -388,7 +353,7 @@ def _render_drift(cfg_path: Path, runtime_dir: Path) -> None:
 
     Without it, a book left behind on old parameters is indistinguishable from one
     that adopted them — the screen shows the file either way. That silence is what
-    let „maksimum otwartych pozycji" sit at 5 while this form said 3.
+    let `max_open_positions` sit at 5 in the engine while this form said 3.
     """
     try:
         drift = config_store.live_drift(cfg_path, runtime_dir)
@@ -400,15 +365,13 @@ def _render_drift(cfg_path: Path, runtime_dir: Path) -> None:
         return
 
     if stuck := [d for d in drift if d.stuck]:
-        st.warning("Silnik handluje na innych ustawieniach, niż pokazuje ten ekran — "
-                   "a świeca, przy której powinien je przyjąć, już minęła.")
+        st.warning(t("cfg.drift.stuck"))
         st.markdown("\n".join(
-            f"- **{d.book}** · `{d.field}`: silnik ma **{d.live}**, na dysku {d.on_disk}"
+            t("cfg.drift.row", book=d.book, field=d.field, live=d.live, disk=d.on_disk)
             for d in stuck))
-        st.caption("Restart silnika wyrówna to na pewno — wróci z tego, co w pliku.")
+        st.caption(t("cfg.drift.restart_fixes"))
     elif drift:
-        st.info("⚡ Silnik przyjmie nowe ustawienia przy najbliższej świecy. "
-                "Do tego czasu handluje na poprzednich.")
+        st.info(t("cfg.drift.pending"))
 
 
 def _render_slot_queue(runtime_dir: Path) -> None:
@@ -420,12 +383,12 @@ def _render_slot_queue(runtime_dir: Path) -> None:
     if not slots:
         return
     st.markdown("\n".join(f"- {line}" for line in slot_lines(slots)))
-    st.caption("Liczby są z ostatniej świecy każdej księgi.")
+    st.caption(t("cfg.slots.as_of"))
 
 
 # ---------- raising the exposure ceiling ----------
 
-@st.dialog("Podnosisz sufit ekspozycji")
+@st.dialog(t("cfg.ceiling.title"))
 def _ceiling_dialog(cfg_path: Path, runtime_dir: Path, changes: dict,
                     model_cls: type, scope: str, raised: tuple[float, float]) -> None:
     """Ask before the ceiling goes up, because the answer arrives one candle later and
@@ -440,40 +403,35 @@ def _ceiling_dialog(cfg_path: Path, runtime_dir: Path, changes: dict,
     nothing.
     """
     before, after = raised
-    st.markdown(f"Z **{before:.0%} konta** na **{after:.0%} konta** naraz w rynku.")
+    st.markdown(t("cfg.ceiling.from_to", before=f"{before:.0%}", after=f"{after:.0%}"))
     try:
         slots = book_slots(journals.book_states(runtime_dir))
     except (OSError, ValueError):
         slots = []
     if slots:
         st.markdown("\n".join(f"- {line}" for line in slot_lines(slots)))
-    st.warning("Powrót do niższej wartości **nie zamyka niczego** — pozycje otwarte "
-               "przy wyższym limicie żyją do celu, bezpiecznika albo terminu. "
-               "9.08 limit podniesiony na pięć godzin zdążył otworzyć cztery pozycje; "
-               "kosztowały 7 USDT długo po tym, jak wrócił na swoje miejsce.")
+    st.warning(t("cfg.ceiling.warning"))
     c1, c2 = st.columns(2)
-    if c1.button("Zapisz mimo to", type="primary", width="stretch"):
+    if c1.button(t("cfg.ceiling.save_anyway"), type="primary", width="stretch"):
         _apply(cfg_path, runtime_dir, changes, model_cls, scope)
-    if c2.button("Anuluj", width="stretch"):
+    if c2.button(t("cfg.cancel"), width="stretch"):
         st.rerun()
 
 
 # ---------- restart handshake ----------
 
-@st.dialog("Zrestartować silnik?")
+@st.dialog(t("cfg.restart.title"))
 def _restart_dialog(runtime_dir: Path, fields: list[str]) -> None:
-    st.write("Te ustawienia silnik czyta tylko przy starcie:")
+    st.write(t("cfg.restart.startup_only"))
     st.markdown("\n".join(f"- `{f}`" for f in fields))
-    st.caption("Silnik zapisze stan wszystkich ksiąg i zakończy się czysto. Kontener "
-               "podniesie się sam (`restart: unless-stopped`), a otwarte pozycje i "
-               "gotówka wrócą ze `state.json`. Poza Dockerem trzeba uruchomić go ręcznie.")
+    st.caption(t("cfg.restart.explain"))
     c1, c2 = st.columns(2)
-    if c1.button("Zrestartuj", type="primary", width="stretch"):
+    if c1.button(t("cfg.restart.do"), type="primary", width="stretch"):
         config_store.request_restart(runtime_dir, actor=auth.current_user())
         st.session_state.pop("pending_restart", None)
         st.session_state["restart_sent"] = True
         st.rerun()
-    if c2.button("Później", width="stretch"):
+    if c2.button(t("cfg.restart.later"), width="stretch"):
         st.session_state.pop("pending_restart", None)
         st.rerun()
 
@@ -482,18 +440,20 @@ def _restart_dialog(runtime_dir: Path, fields: list[str]) -> None:
 
 def _render_history(runtime_dir: Path) -> None:
     rows = config_store.load_history(runtime_dir, limit=100)
-    st.subheader("Historia zmian")
+    st.subheader(t("cfg.history.title"))
     if not rows:
-        st.caption("Jeszcze nic nie zmieniano — bot działa na wartościach z config.yaml.")
+        st.caption(t("cfg.history.empty"))
         return
-    st.caption("Te momenty są też zaznaczone przerywaną kreską na wykresie kapitału, "
-               "żeby było widać, od kiedy wynik dotyczy innych ustawień.")
+    st.caption(t("cfg.history.marked_on_chart"))
+    col = {name: t(f"cfg.history.col.{name}")
+           for name in ("time", "field", "old", "new", "actor")}
     df = pd.DataFrame(rows)
-    df["czas"] = pd.to_datetime(df["timestamp"]).dt.strftime("%d.%m.%Y %H:%M")
-    view = df[["czas", "field", "old", "new", "actor"]].rename(
-        columns={"field": "pole", "old": "było", "new": "jest", "actor": "kto"})
+    df[col["time"]] = pd.to_datetime(df["timestamp"]).dt.strftime("%d.%m.%Y %H:%M")
+    view = df[[col["time"], "field", "old", "new", "actor"]].rename(
+        columns={"field": col["field"], "old": col["old"],
+                 "new": col["new"], "actor": col["actor"]})
     if layout.is_mobile():
-        layout.cards(view, "pole", ["czas", "było", "jest"])
+        layout.cards(view, col["field"], [col["time"], col["old"], col["new"]])
     else:
         st.dataframe(view, width="stretch", hide_index=True)
 
@@ -501,51 +461,49 @@ def _render_history(runtime_dir: Path) -> None:
 # ---------- entry ----------
 
 def render() -> None:
-    st.caption("Zmiany trafiają do `config.overrides.yaml`. Plik `config.yaml` zostaje "
-               "nietknięty jako udokumentowany wzorzec — „przywróć domyślne\" po prostu "
-               "usuwa nadpisanie.")
-    st.markdown(f"{HOT} — wchodzi przy najbliższej świecy · {RESTART} — wymaga restartu silnika")
+    st.caption(t("cfg.intro"))
+    st.markdown(t("cfg.markers", hot=HOT, restart=RESTART))
     layout.layout_switch()
 
     if st.session_state.pop("restart_sent", False):
-        st.success("Wysłano prośbę o restart. Silnik zejdzie w ciągu ~10 sekund "
-                   "i wróci z nowymi ustawieniami.")
+        st.success(t("cfg.restart.sent"))
 
     if saved := st.session_state.pop("config_saved", None):
-        st.success(f"Zapisano:\n{saved}")
+        st.success(t("cfg.saved", changes=saved))
         if st.session_state.pop("config_saved_hot", False):
-            st.info("⚡ Wchodzi w życie przy najbliższej świecy — bez restartu.")
+            st.info(t("cfg.saved.hot"))
 
     cfg_path = config_path()
     runtime_dir = _runtime_dir()
 
     if pending := st.session_state.get("pending_restart"):
-        st.warning("Zapisano ustawienia, które silnik czyta tylko przy starcie.")
-        if st.button("🔄 Zrestartuj silnik", type="primary"):
+        st.warning(t("cfg.restart.needed"))
+        if st.button(t("cfg.restart.button"), type="primary"):
             _restart_dialog(runtime_dir, pending)
 
-    scope = st.segmented_control("Moduł", ["Krypto-scalper", "Zarządca portfela"],
-                                 default="Krypto-scalper",
-                                 label_visibility="collapsed") or "Krypto-scalper"
+    # Options are codes, formatted for display only — comparing against a translated
+    # label would make this branch depend on the viewer's language.
+    scope = st.segmented_control(t("module.label"), ["crypto", "portfolio"], default="crypto",
+                                 format_func=lambda s: t(f"module.{s}"),
+                                 label_visibility="collapsed") or "crypto"
 
-    if scope == "Krypto-scalper":
+    if scope == "crypto":
         # Crypto only: the portfolio loop is daily and has no hot-reload to lag behind,
         # which the caption in the other branch already says.
         _render_drift(cfg_path, runtime_dir)
         effective = config_store.effective_config(cfg_path)
         overrides = config_store.load_overrides(cfg_path)
-        for title, fields in CRYPTO_SECTIONS.items():
-            _render_section(title, fields, cfg_path, runtime_dir, effective, overrides,
+        for section, fields in CRYPTO_SECTIONS.items():
+            _render_section(section, fields, cfg_path, runtime_dir, effective, overrides,
                             Config, "crypto")
         _render_variants(cfg_path, runtime_dir, effective, overrides)
     else:
         p_path = _portfolio_config_path(None)
         effective = config_store.effective_config(p_path)
         overrides = config_store.load_overrides(p_path)
-        st.caption("Pętla portfela jest dzienna, więc każda zmiana i tak wchodzi przy "
-                   "najbliższym przebiegu — nie ma tu hot-reloadu.")
-        for title, fields in PORTFOLIO_SECTIONS.items():
-            _render_section(title, fields, p_path, runtime_dir, effective, overrides,
+        st.caption(t("cfg.portfolio.daily_loop"))
+        for section, fields in PORTFOLIO_SECTIONS.items():
+            _render_section(section, fields, p_path, runtime_dir, effective, overrides,
                             PortfolioConfig, "portfolio")
 
     st.divider()
@@ -556,9 +514,8 @@ def _render_variants(cfg_path: Path, runtime_dir: Path,
                      effective: dict, overrides: dict) -> None:
     """A/B books, edited as a grid. Adding or removing one changes which books exist,
     so this is restart-only by nature."""
-    with st.expander(f"{RESTART} Warianty A/B"):
-        st.caption("Każdy wiersz to osobna księga handlująca tymi samymi świecami. "
-                   "Puste pole = wartość z sekcji wyżej. Zmiana listy wymaga restartu.")
+    with st.expander(f"{RESTART} {t('cfg.variants.title')}"):
+        st.caption(t("cfg.variants.help"))
         variants = effective.get("variants", []) or []
         cols = ["name", "prob_threshold", "tp_atr_mult", "sl_atr_mult",
                 "horizon_bars", "direction", "rollover",
@@ -569,7 +526,7 @@ def _render_variants(cfg_path: Path, runtime_dir: Path,
                 df[c] = None
         edited = st.data_editor(df[cols], num_rows="dynamic", width="stretch",
                                 hide_index=True, key="variants_editor")
-        if st.button("Zapisz warianty", key="save_variants"):
+        if st.button(t("cfg.variants.save"), key="save_variants"):
             rows = [
                 {k: v for k, v in rec.items() if v is not None and v != ""}
                 for rec in edited.to_dict("records")
@@ -577,7 +534,7 @@ def _render_variants(cfg_path: Path, runtime_dir: Path,
             ]
             _apply(cfg_path, runtime_dir, {"variants": rows}, Config, "crypto")
         if config_store.get_path(overrides, "variants") is not None and st.button(
-                "Przywróć domyślne warianty", key="reset_variants"):
+                t("cfg.variants.reset"), key="reset_variants"):
             _apply(cfg_path, runtime_dir, {"variants": None}, Config, "crypto")
 
 

@@ -15,9 +15,11 @@ import logging
 
 import pandas as pd
 
+from trademon import i18n
 from trademon.crosssec.config import load_crosssec_config
 from trademon.crosssec.panels import refresh_market
 from trademon.crosssec.validate import run_matrix, verdict
+from trademon.i18n import t
 from trademon.research.log import log_experiment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -27,41 +29,38 @@ COLS = ["market", "direction", "window", "total_return_pct", "hurdle_pct",
         "excess_vs_hurdle_pp", "sigmas_from_zero", "sharpe", "max_drawdown_pct",
         "avg_gross_exposure_pct", "avg_net_exposure_pct", "n_rebalances",
         "fees_pct_of_capital"]
-HEADERS = {"total_return_pct": "wynik %", "hurdle_pct": "poprzeczka %",
-           "excess_vs_hurdle_pp": "nadwyżka pkt", "sigmas_from_zero": "odch. od 0",
-           "sharpe": "Sharpe",
-           "max_drawdown_pct": "obsunięcie %", "avg_gross_exposure_pct": "w grze %",
-           "avg_net_exposure_pct": "netto %", "n_rebalances": "rebalansów",
-           "fees_pct_of_capital": "koszty %", "market": "rynek",
-           "direction": "kierunek", "window": "okno"}
+# Console headings only, translated from the shared `col.*` keys. The CSV this script
+# writes keeps the raw column names, which is what `dashboard/research_view` reads.
+HEADER_KEYS = COLS
 
 
 def render(matrix: pd.DataFrame) -> str:
+    """The printed report. It lands in `st.code` in the panel's research tab, so it
+    follows the reader's language the same way the rest of the screen does — the panel
+    passes it down through `TRADEMON_LANG`."""
     if matrix.empty:
-        return "Brak wyników — najpierw pobierz dane (--refresh)."
-    view = matrix[COLS].rename(columns=HEADERS).copy()
-    view["okno"] = view["okno"].map(lambda w: "CAŁOŚĆ" if w == 0 else str(w))
-    lines = ["=" * 100, "MODUŁ 3: RANKING PRZEKROJOWY — ten sam kod na dwóch rynkach",
-             "=" * 100, "",
+        return t("cli.crosssec.no_results")
+    view = matrix[COLS].rename(columns={k: t(f"col.{k}") for k in HEADER_KEYS}).copy()
+    window_col = t("col.window")
+    view[window_col] = view[window_col].map(
+        lambda w: t("cli.crosssec.whole") if w == 0 else str(w))
+    lines = ["=" * 100, t("cli.crosssec.title"), "=" * 100, "",
              view.to_string(index=False, float_format=lambda v: f"{v:.2f}"), "",
-             "Poprzeczka zależy od ekspozycji: long_only (~100% netto) mierzy się",
-             "z koszykiem kup&trzymaj, long_short (~0% netto) z gotówką. Porównywanie",
-             "książki neutralnej rynkowo z w pełni długim koszykiem to ten sam błąd",
-             "niedopasowanej ekspozycji, który zawyżał ocenę Modułu 1.", "",
-             "-" * 100, "CZY ZNAK SIĘ TRZYMA NA ROZŁĄCZNYCH OKNACH?", "-" * 100]
+             t("cli.crosssec.hurdle_note"), "",
+             "-" * 100, t("cli.crosssec.sign_question"), "-" * 100]
     lines += verdict(matrix)
     full = matrix[matrix["window"] == 0]
     if len(full):
-        lines += ["", "-" * 100,
-                  "CZY WYNIK JEST ODRÓŻNIALNY OD SZCZĘŚCIA? (całe okresy)", "-" * 100]
+        lines += ["", "-" * 100, t("cli.crosssec.luck_question"), "-" * 100]
         for _, r in full.iterrows():
             sig = abs(r["sigmas_from_zero"]) > 2.0
-            lines.append(
-                f"{r['market']:6s} {r['direction']:11s}: wynik {r['total_return_pct']:+7.1f}% "
-                f"przy {r['sigmas_from_zero']:+.2f} odchylenia od zera — "
-                + ("ISTOTNE" if sig else "NIEODRÓŻNIALNE od szumu (potrzeba ~2)"))
-    lines += ["", "Okno CAŁOŚĆ jest tylko kontekstem — nakłada się na okna 1..N,",
-              "więc nie jest niezależnym potwierdzeniem.", "=" * 100]
+            lines.append(t(
+                "cli.crosssec.significance_line", market=f"{r['market']:6s}",
+                direction=f"{r['direction']:11s}",
+                ret=f"{r['total_return_pct']:+7.1f}",
+                sigmas=f"{r['sigmas_from_zero']:+.2f}",
+                tail=t("cli.crosssec.significant" if sig else "cli.crosssec.not_significant")))
+    lines += ["", t("cli.crosssec.whole_is_context"), "=" * 100]
     return "\n".join(lines)
 
 
@@ -77,6 +76,7 @@ def main() -> None:
     args = p.parse_args()
 
     cfg = load_crosssec_config()
+    i18n.init(getattr(cfg, "display_language", None))
     if args.lookback:
         cfg = cfg.model_copy(update={
             "signal": cfg.signal.model_copy(update={"lookback_days": args.lookback})})

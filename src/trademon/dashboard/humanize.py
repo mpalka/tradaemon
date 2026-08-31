@@ -1,8 +1,10 @@
-"""Plain-Polish translation layer for the beginner dashboard.
+"""Plain-language layer for the beginner dashboard.
 
 Turns raw engine data (signal reasons, alert kinds, exit reasons, positions) into
-sentences a first-time investor understands. Shared by the crypto and portfolio
-views so the wording stays consistent. Pure functions — no Streamlit here.
+sentences a first-time investor understands, in whichever language the viewer picked.
+Shared by the crypto and portfolio views so the wording stays consistent. Pure
+functions — no Streamlit here, so this module stays unit-testable and is the natural
+anchor for the message catalogues in `trademon.locales`.
 """
 
 from __future__ import annotations
@@ -11,32 +13,26 @@ from datetime import datetime, timedelta, tzinfo
 
 import pandas as pd
 
+from trademon.i18n import t
+
 GOOD, BAD, MUTED = "#0ca30c", "#d03b3b", "#999999"
 
 # Why the crypto bot did / didn't trade on the last candle (engine `signals`).
-REASON_PL = {
-    "in_position": "trzyma pozycję",
-    "warmup": "rozgrzewa się (zbiera dane)",
-    # Only pairs that cleared the threshold reach this reason, so it is an
-    # opportunity turned away, not merely "the bot is idle" — and the p(long)
-    # column next to it now says how big an opportunity.
-    "risk_blocked": "widzi okazję, ale limit ryzyka nie pozwala",
-    "features_nan": "czeka na komplet danych",
-    "no_atr": "czeka na komplet danych",
-    "below_threshold": "nie widzi wystarczającej okazji",
-    "enter_long": "otwiera pozycję (stawia na wzrost)",
-    "enter_short": "otwiera pozycję (stawia na spadek)",
-}
+# `no_atr` and `features_nan` deliberately share a sentence: the distinction is
+# real in the engine and meaningless to the reader.
+REASON_CODES = ("in_position", "warmup", "risk_blocked", "features_nan", "no_atr",
+                "below_threshold", "enter_long", "enter_short")
 
 # How a position closed.
-EXIT_PL = {
-    "tp": "z zyskiem (cel osiągnięty)",
-    "sl": "ze stratą (bezpiecznik)",
-    "timeout": "po upływie czasu",
-}
+EXIT_CODES = ("tp", "sl", "timeout")
 
-# Alert kinds -> (emoji, short label). Alert messages are already Polish, so the
-# emoji + time is usually all we add; labels are a fallback when a message is absent.
+# Jargon that earns a tooltip (`help=`) wherever it appears.
+GLOSSARY_TERMS = ("sharpe", "max_drawdown", "profit_factor", "win_rate", "buy_hold",
+                  "rebalance", "drift", "cagr", "volatility", "kill_switch",
+                  "money_at_work", "return_total", "time_in_market", "return_at_work",
+                  "bh_fair")
+
+# Alert kinds -> emoji. Language-independent, so it stays a plain dict.
 ALERT_EMOJI = {
     "trade_open": "🟢",
     "trade_close": "🔁",
@@ -49,52 +45,53 @@ ALERT_EMOJI = {
     "initial_allocation": "🎯",
 }
 
-# One-line explanations shown as tooltips (`help=`) next to jargon.
-GLOSSARY = {
-    "Sharpe": "Zysk w stosunku do wahań. Wyżej = lepiej. Powyżej 1 to dobrze, "
-              "poniżej 0 oznacza stratę względem ryzyka.",
-    "Max drawdown": "Największy spadek od szczytu do dołka. -20% znaczy, że w "
-                    "najgorszym momencie portfel był o piątą część niżej niż na maksimum.",
-    "Profit factor": "Ile zarobiono na każdą 1 $ straty. Powyżej 1 = więcej zysków niż strat.",
-    "Win rate": "Odsetek transakcji zakończonych na plusie.",
-    "Buy & hold": "Kupujesz raz i nic nie robisz. To poprzeczka: bot ma sens tylko, "
-                  "jeśli jest lepszy niż zwykłe trzymanie.",
-    "Rebalans": "Przywrócenie zaplanowanych proporcji koszyka (np. z powrotem 50/30/20), "
-                "gdy ceny je rozjadą.",
-    "Drift": "O ile proporcje koszyka odjechały od planu (w punktach procentowych).",
-    "CAGR": "Średnioroczne tempo wzrostu — ile procent na rok wychodziłoby średnio.",
-    "Zmienność": "Jak mocno wartość skacze w górę i w dół. Niżej = spokojniej.",
-    "Kill-switch": "Bezpiecznik: po zbyt dużej stracie w ciągu dnia bot przestaje "
-                   "otwierać nowe pozycje.",
-    "Pieniądze w grze": "Jaka część konta naprawdę siedzi w rynku. Reszta czeka w gotówce "
-                        "i nic nie robi — ani nie zarabia, ani nie traci.",
-    "wynik_calosc": "Wynik policzony od wszystkich pieniędzy — także tych, które leżały "
-                    "bezczynnie. Dlatego wygląda łagodniej, niż zasługuje sam pomysł bota.",
-    "Czas w rynku": "Jak często bot w ogóle miał otwartą pozycję. Niski wynik znaczy, "
-                    "że przez większość czasu tylko czekał.",
-    "wynik_w_grze": "Ten sam wynik, ale policzony tylko od pieniędzy, które faktycznie grały. "
-                    "To uczciwsza ocena samego pomysłu: gdyby bot grał całym kontem, "
-                    "wyszłoby mniej więcej tyle. Przybliżenie, nie wyrocznia — a gdy bot "
-                    "był w rynku bardzo rzadko, pokazujemy „—”, bo przeliczanie takiej "
-                    "resztki na całe konto to już zgadywanie.",
-    "Tyle w rynku co bot": "Ktoś, kto włożył w rynek tyle samo pieniędzy co bot i po prostu "
-                           "czekał. To sprawiedliwa poprzeczka — porównanie z kimś, kto "
-                           "włożył wszystko, chwali bota za samą nieobecność w spadkach.",
-}
+
+def reason(code: str) -> str:
+    """Engine signal reason -> a sentence. Unknown codes pass through unchanged."""
+    return t(f"reason.{code}") if code in REASON_CODES else code
+
+
+def exit_reason(code: str) -> str:
+    """`tp` / `sl` / `timeout` -> a sentence."""
+    return t(f"exit.{code}") if code in EXIT_CODES else code
+
+
+def glossary(term: str) -> str:
+    """One-line explanation of a piece of jargon, for a `help=` tooltip."""
+    return t(f"glossary.{term}")
 
 
 # ---------- formatting ----------
 
+def dec(text: str) -> str:
+    """Swap the decimal point for whatever the language writes — `0,58` in Polish.
+
+    Applied to an already-formatted number, not to the float, so `f"{x:.2f}"` keeps
+    deciding the precision and this only decides how it is punctuated.
+    """
+    return text.replace(".", t("fmt.decimal_separator"))
+
+
+def md(text: str) -> str:
+    """Escape a rendered sentence for Streamlit's markdown.
+
+    A pair of `$` in one string is LaTeX to Streamlit, so a caption naming two amounts
+    silently loses both currency symbols and renders the numbers between them as maths.
+    `st.metric` is unaffected, which is why the bug hid in the captions only.
+    """
+    return text.replace("$", r"\$")
+
+
 def money(x: float) -> str:
-    return f"{x:,.0f} $"
+    return t("fmt.money", amount=f"{x:,.0f}")
 
 
 def money2(x: float) -> str:
-    return f"{x:,.2f} $"
+    return t("fmt.money", amount=f"{x:,.2f}")
 
 
 def signed_money(x: float) -> str:
-    return f"{x:+,.2f} $"
+    return t("fmt.money", amount=f"{x:+,.2f}")
 
 
 def to_local(ts, tz: tzinfo | None = None):
@@ -138,11 +135,11 @@ def position_card(pos: dict, last_price: float | None) -> dict:
     pnl = sign * qty * (price - entry)
     pct = (pnl / invested * 100.0) if invested else 0.0
     base = symbol.split("/")[0]
-    verb = "Kupił" if side == "long" else "Gra na spadek"
+    title_key = "card.position.long" if side == "long" else "card.position.short"
     return {
         "symbol": symbol,
-        "title": f"{verb} {base} za {money(invested)}",
-        "detail": f"teraz {signed_money(pnl)} ({pct:+.1f}%)",
+        "title": t(title_key, asset=base, amount=money(invested)),
+        "detail": t("card.position.now", pnl=signed_money(pnl), pct=f"{pct:+.1f}"),
         "pnl": pnl,
         "pct": pct,
         "emoji": "🟢" if pnl >= 0 else "🔴",
@@ -157,14 +154,23 @@ def holding_card(symbol: str, value: float, weight: float, target: float) -> dic
     return {
         "symbol": symbol,
         "title": f"{symbol} — {money(value)}",
-        "detail": f"{weight * 100:.0f}% portfela (cel {target * 100:.0f}%)",
+        "detail": t("card.holding.weight", weight=f"{weight * 100:.0f}",
+                    target=f"{target * 100:.0f}"),
         "emoji": "⚖️" if off else "✅",
         "color": MUTED if not off else "#c47f00",
     }
 
 
 def event_line(record: dict, tz: tzinfo | None = None) -> dict:
-    """Turn one alert/trade record into {emoji, time, text} for the timeline."""
+    """Turn one alert/trade record into {emoji, time, text} for the timeline.
+
+    Records written from 0.2.0 onward carry `kind` plus a `params` dict, so the
+    sentence is composed here and reads in the viewer's language. Older records —
+    and every line already sitting in a running deployment's `alerts.jsonl` — hold
+    only a pre-rendered Polish `message`, which we show verbatim. Retranslating
+    history is not possible; losing it would be worse than showing it in one
+    language.
+    """
     kind = record.get("kind", "")
     emoji = ALERT_EMOJI.get(kind, "•")
     if kind == "trade_close" and "pnl" in record:
@@ -175,13 +181,23 @@ def event_line(record: dict, tz: tzinfo | None = None) -> dict:
         # an outage — rows written before the flag existed are all outages, and
         # reading one of those as an all-clear is the failure worth avoiding.
         emoji = "✅" if record.get("ok", False) else "📡"
-    text = record.get("message")
-    if not text:  # fallback for raw trade rows without a friendly message
-        if "exit_reason" in record:
-            text = f"{record.get('symbol', '')} zamknięte {EXIT_PL.get(record['exit_reason'], '')}"
-        else:
-            text = kind or "zdarzenie"
-    return {"emoji": emoji, "time": _fmt_time(record.get("timestamp"), tz), "text": text}
+    return {"emoji": emoji, "time": _fmt_time(record.get("timestamp"), tz),
+            "text": _event_text(record, kind)}
+
+
+def _event_text(record: dict, kind: str) -> str:
+    """Structured params first, then a stored message, then a bare fallback."""
+    key = record.get("msg_key")
+    params = record.get("params")
+    if key and isinstance(params, dict):
+        return t(key, **params)
+    stored = record.get("message")
+    if stored:
+        return str(stored)
+    if "exit_reason" in record:  # raw trade rows carry no friendly message at all
+        return t("event.trade_closed", symbol=record.get("symbol", ""),
+                 how=exit_reason(record["exit_reason"]))
+    return kind or t("event.generic")
 
 
 def bot_status(last_candle_ts: dict, timeframe_ms: int, now: datetime,
@@ -196,11 +212,11 @@ def bot_status(last_candle_ts: dict, timeframe_ms: int, now: datetime,
     overdue.
     """
     if not last_candle_ts:
-        return {"ok": False, "emoji": "🔴", "text": "bot jeszcze nie odczytał rynku"}
+        return {"ok": False, "emoji": "🔴", "text": t("status.bot.no_read")}
     try:
         latest_open = datetime.fromisoformat(max(last_candle_ts.values()))
     except ValueError:
-        return {"ok": False, "emoji": "🔴", "text": "nieznany czas ostatniego odczytu"}
+        return {"ok": False, "emoji": "🔴", "text": t("status.bot.unknown_time")}
     bar = timedelta(milliseconds=timeframe_ms)
     closed_at = latest_open + bar          # when that candle actually finalized
     next_at = closed_at + bar              # when the next one is due
@@ -209,10 +225,8 @@ def bot_status(last_candle_ts: dict, timeframe_ms: int, now: datetime,
     when = _fmt_time(closed_at, tz)
     if fresh:
         return {"ok": True, "emoji": "🟢",
-                "text": f"działa — ostatnia świeca zamknięta {when}, "
-                        f"następna około {_fmt_time(next_at, tz)}"}
-    return {"ok": False, "emoji": "🔴",
-            "text": f"może nie odpowiadać — ostatnia świeca zamknięta {when}"}
+                "text": t("status.bot.running", when=when, next=_fmt_time(next_at, tz))}
+    return {"ok": False, "emoji": "🔴", "text": t("status.bot.stale", when=when)}
 
 
 # A stalled ticker is the earliest honest sign of trouble, so the panel may not
@@ -223,14 +237,14 @@ CONNECTION_STALE_SECONDS = 300
 
 
 def _ago(seconds: float) -> str:
-    """How long ago, in words that dodge Polish plurals — "3 minuty" vs "5 minut"
-    is a rule this line does not need to know."""
+    """How long ago, in words that dodge plural rules — "3 minuty" vs "5 minut" is
+    a distinction this line does not need to make, in any language."""
     if seconds < 90:
-        return "przed chwilą"
+        return t("ago.just_now")
     minutes = int(seconds // 60)
     if minutes < 60:
-        return f"{minutes} min temu"
-    return f"{minutes // 60} h {minutes % 60} min temu"
+        return t("ago.minutes", minutes=minutes)
+    return t("ago.hours", hours=minutes // 60, minutes=minutes % 60)
 
 
 def connection_status(updated_at: str | datetime | None, now: datetime) -> dict:
@@ -242,22 +256,20 @@ def connection_status(updated_at: str | datetime | None, now: datetime) -> dict:
     only ever on a successful call, so it is the sharpest liveness signal we have.
 
     It exists because the alert journal could not answer this. A dropped
-    connection files "brak połączenia z giełdą", but the matching all-clear is
-    written by the process that saw the outage — and a container that restarts in
-    between starts clean and never writes it. The alarm then hangs there,
-    truthful about the past and misleading about the present. A heartbeat cannot
-    go stale that way: it either ticked recently or it did not.
+    connection files an outage alert, but the matching all-clear is written by the
+    process that saw the outage — and a container that restarts in between starts
+    clean and never writes it. The alarm then hangs there, truthful about the past
+    and misleading about the present. A heartbeat cannot go stale that way: it
+    either ticked recently or it did not.
     """
     if not updated_at:
-        return {"ok": False, "emoji": "📡", "text": "brak kontaktu z giełdą"}
+        return {"ok": False, "emoji": "📡", "text": t("status.conn.none")}
     try:
         ts = updated_at if isinstance(updated_at, datetime) else datetime.fromisoformat(
             str(updated_at))
     except ValueError:
-        return {"ok": False, "emoji": "📡", "text": "nieznany czas kontaktu z giełdą"}
+        return {"ok": False, "emoji": "📡", "text": t("status.conn.unknown_time")}
     seconds = (now - ts).total_seconds()
     if seconds <= CONNECTION_STALE_SECONDS:
-        return {"ok": True, "emoji": "📡",
-                "text": f"kontakt z giełdą: {_ago(seconds)}"}
-    return {"ok": False, "emoji": "📡",
-            "text": f"brak kontaktu z giełdą od {_ago(seconds)} — bot czeka i ponawia"}
+        return {"ok": True, "emoji": "📡", "text": t("status.conn.ok", ago=_ago(seconds))}
+    return {"ok": False, "emoji": "📡", "text": t("status.conn.stale", ago=_ago(seconds))}

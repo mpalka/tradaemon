@@ -25,6 +25,7 @@ import logging
 import numpy as np
 import pandas as pd
 
+from trademon import i18n
 from trademon.backtest.metrics import periods_per_year, summarize
 from trademon.config import Config
 from trademon.execution.fills import (
@@ -91,12 +92,17 @@ def run_backtest(
     entry_bar = -1
     deadline = -1
     entry_ts = None
+    pos_prob = float("nan")  # the probability that opened this position
 
     # pending maker limit entry (order_style == "maker")
     pend_active = False
     pend_side = 1
     pend_limit = pend_atr = 0.0
     pend_expiry = -1
+    # The maker order rests across bars, so its probability has to wait with it. Read
+    # off the fill bar instead, it would be a different bar's opinion of a signal that
+    # was already committed to — and NaN whenever features were not yet valid.
+    pend_prob = float("nan")
 
     def set_barriers(entry_price: float, bar_atr: float, s: int) -> tuple[float, float]:
         return (
@@ -104,9 +110,9 @@ def run_backtest(
             entry_price - s * strat.sl_atr_mult * bar_atr,
         )
 
-    def open_position(fill, s: int, bar: int, bar_atr: float) -> bool:
+    def open_position(fill, s: int, bar: int, bar_atr: float, prob: float) -> bool:
         nonlocal cash, pos_qty, side, pos_entry, margin, entry_fees
-        nonlocal tp, sl, entry_bar, deadline, entry_ts, n_fills
+        nonlocal tp, sl, entry_bar, deadline, entry_ts, n_fills, pos_prob
         if fill.notional + fill.fee > cash:
             return False
         cash -= fill.notional + fill.fee
@@ -114,6 +120,7 @@ def run_backtest(
         pos_qty, side, pos_entry, entry_fees = fill.notional / fill.price, s, fill.price, fill.fee
         tp, sl = set_barriers(fill.price, bar_atr, s)
         entry_bar, deadline, entry_ts = bar, bar + strat.horizon_bars, ts[bar]
+        pos_prob = prob
         n_fills += 1
         return True
 
@@ -169,6 +176,8 @@ def run_backtest(
                         "exit_reason": reason,
                         "fees": entry_fees + fill.fee,
                         "pnl": pnl,
+                        # see the note in backtest/book.py's close_position
+                        "prob": pos_prob,
                     }
                 )
                 pos_qty, margin = 0.0, 0.0
@@ -186,7 +195,7 @@ def run_backtest(
                     fill = (maker_buy_fill if pend_side == 1 else maker_sell_fill)(
                         pend_limit, qty, costs
                     )
-                    open_position(fill, pend_side, t, pend_atr)
+                    open_position(fill, pend_side, t, pend_atr, pend_prob)
                     pend_active = False
             else:
                 pend_active = False  # expired unfilled -> the signal is missed
@@ -204,7 +213,11 @@ def run_backtest(
             if not np.isnan(p_long[t]) and p_long[t] >= best_p:
                 sig_side, best_p = 1, p_long[t]
             if allow_short and not np.isnan(p_short[t]) and p_short[t] > best_p:
-                sig_side = -1
+                # best_p is assigned here too, mirroring book.py's _signal. It used to
+                # be left holding the long side's number, which changed no decision
+                # because nothing read it afterwards — but the trade record does now,
+                # and every short would have been filed under p_long.
+                sig_side, best_p = -1, p_short[t]
             if sig_side != 0:
                 n_signals += 1
                 if maker:
@@ -212,12 +225,13 @@ def run_backtest(
                     pend_side = sig_side
                     pend_limit, pend_atr = close[t], atr_v[t]
                     pend_expiry = t + cfg.execution.maker_timeout_bars
+                    pend_prob = float(best_p)
                 else:
                     qty = (cash * cfg.risk.position_pct) / open_[t + 1]
                     fill = (buy_fill if sig_side == 1 else sell_fill)(
                         open_[t + 1], qty, costs
                     )
-                    open_position(fill, sig_side, t + 1, atr_v[t])
+                    open_position(fill, sig_side, t + 1, atr_v[t], float(best_p))
 
         if t >= trade_from:
             equity_curve[t] = cash + margin + side * pos_qty * (close[t] - pos_entry)
@@ -330,9 +344,9 @@ def render_html_report(results: list[dict], cfg: Config) -> str:
         "mark": {"type": "line", "strokeWidth": 1.5},
         "encoding": {
             "x": {"field": "timestamp", "type": "temporal", "title": None},
-            "y": {"field": "equity", "type": "quantitative", "title": "Kapitał (USDT)",
-                  "scale": {"zero": False}},
-            "color": {"field": "symbol", "type": "nominal", "title": "Para"},
+            "y": {"field": "equity", "type": "quantitative",
+                  "title": i18n.t("variants.equity_axis"), "scale": {"zero": False}},
+            "color": {"field": "symbol", "type": "nominal", "title": i18n.t("col.symbol")},
         },
     }
 
@@ -348,19 +362,21 @@ def render_html_report(results: list[dict], cfg: Config) -> str:
             f"{s.get('fees_paid', 0):.2f}",
         ])
 
-    header = "".join(f"<th>{h}</th>" for h in
-                     ["Para", "Transakcje", "Win rate", "Profit factor",
-                      "Wynik netto", "W grze (śr.)", "Czas w rynku", "Wynik od tego",
-                      "Sharpe", "Max DD", "Prowizje"])
+    header = "".join(f"<th>{i18n.t(k)}</th>" for k in
+                     ["col.symbol", "col.trades", "metric.win_rate", "metric.profit_factor",
+                      "col.net_pnl", "report.html.avg_at_work", "metric.time_in_market",
+                      "col.return_on_risked_pct", "metric.sharpe", "col.max_dd_pct",
+                      "col.fees"])
     body = "".join(f"<tr>{cells(r['summary'])}</tr>" for r in results)
     net = [r["summary"]["total_return_pct"] for r in results]
     positive = all(x > 0 for x in net)
-    verdict = "DODATNI po kosztach" if positive else "UJEMNY po kosztach"
+    verdict = i18n.t("report.html.positive" if positive else "report.html.negative")
     color = "#0ca30c" if positive else "#d03b3b"
     period = results[0]["summary"]["period"] if results else {"start": "", "end": ""}
 
-    return f"""<!doctype html><html lang="pl"><head><meta charset="utf-8">
-<title>TraDaemon 👹💰 — raport backtestu</title>
+    title = i18n.t("report.html.title")
+    return f"""<!doctype html><html lang="{i18n.get_lang()}"><head><meta charset="utf-8">
+<title>{title}</title>
 <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
 <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
 <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
@@ -373,10 +389,10 @@ def render_html_report(results: list[dict], cfg: Config) -> str:
  th:first-child,td:first-child{{text-align:left}} th{{background:#f4f4f4}}
  #chart{{margin-top:1.5rem}}
 </style></head><body>
-<h1>TraDaemon 👹💰 — raport backtestu</h1>
-<p class="sub">Okres: {period['start']} .. {period['end']} · timeframe {cfg.exchange.timeframe}
- · {len(results)} par</p>
-<p class="verdict">WERDYKT: {verdict}</p>
+<h1>{title}</h1>
+<p class="sub">{i18n.t("report.html.subtitle", start=period['start'], end=period['end'],
+                  timeframe=cfg.exchange.timeframe, pairs=len(results))}</p>
+<p class="verdict">{i18n.t("report.html.verdict", verdict=verdict)}</p>
 <div id="chart"></div>
 <table><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table>
 <script>vegaEmbed('#chart', {json.dumps(spec)}, {{actions:false}});</script>

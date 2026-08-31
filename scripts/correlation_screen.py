@@ -15,17 +15,19 @@ import logging
 
 import pandas as pd
 
+from trademon import i18n
+from trademon.i18n import t
 from trademon.portfolio.config import load_portfolio_config
-from trademon.portfolio.correlation import screen, summarize_screen
+from trademon.portfolio.correlation import screen, summarize_screen, verdict_help
 from trademon.portfolio.data import download_etf, load_wide_panel
 from trademon.research.log import log_experiment
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("screen")
 
-HEADERS = {"symbol": "aktywo", "corr": "korelacja", "roll_min": "min 3-let.",
-           "roll_max": "max 3-let.", "cagr_pct": "CAGR %", "months": "mies.",
-           "verdict": "werdykt"}
+# Console headings only, translated from the shared `col.*` keys. The CSV keeps the raw
+# column names and the raw verdict tokens, which is what `research_view` reads.
+HEADER_KEYS = ["symbol", "corr", "roll_min", "roll_max", "cagr_pct", "months", "verdict"]
 
 
 def fetch(data_dir, symbols: list[str]) -> list[str]:
@@ -42,30 +44,23 @@ def fetch(data_dir, symbols: list[str]) -> list[str]:
 
 def render(result: pd.DataFrame, benchmark: str, years: int,
            as_of: str | None = None) -> str:
-    view = result.rename(columns=HEADERS)
-    okres = (f"{years} lat do {as_of} — TYLKO to, co było wiadome wtedy"
-             if as_of else f"ostatnie {years} lat")
+    view = result.rename(columns={k: t(f"col.{k}") for k in HEADER_KEYS})
+    period = (t("cli.screen.period.as_of", years=years, as_of=as_of)
+              if as_of else t("cli.screen.period.recent", years=years))
     lines = ["=" * 88,
-             f"PRZESIEW DYWERSYFIKACJI — co porusza się inaczej niż {benchmark}?",
-             f"(korelacje miesięcznych stóp zwrotu, {okres})", "=" * 88, "",
+             t("cli.screen.title", benchmark=benchmark),
+             t("cli.screen.subtitle", period=period), "=" * 88, "",
              view.to_string(index=False, float_format=lambda v: f"{v:.2f}"), "",
-             "-" * 88, "JAK TO CZYTAĆ", "-" * 88,
-             "Kolumny 'min/max 3-let.' są ważniejsze niż średnia korelacja: pokazują,",
-             "co robiła korelacja w najgorszym momencie. Aktywo o średniej +0,2, które",
-             "w kryzysie skacze do +0,75, nie ochroniło portfela wtedy, gdy było potrzebne.",
+             "-" * 88, t("cli.screen.how_to_read"), "-" * 88,
+             t("cli.screen.rolling_matters"),
              "",
-             "KANDYDAT   = niska korelacja, stabilna, dodatni zwrot",
-             "NIESTABILNY= niska średnio, ale w kryzysie idzie razem z rynkiem",
-             "TRACI      = dywersyfikuje, ale zjada portfel (ujemny CAGR)",
-             "PUŁAPKA    = ujemna korelacja z konstrukcji (instrumenty odwrotne,",
-             "             zmienność) — płaci za nią erozją kapitału",
-             "", "-" * 88, "WNIOSEK", "-" * 88]
+             # The token on the left is what the CSV stores; the words explain it.
+             *(f"{token:<12}= {verdict_help(token)}"
+               for token in ("KANDYDAT", "NIESTABILNY", "TRACI", "PUŁAPKA")),
+             "", "-" * 88, t("cli.screen.conclusion"), "-" * 88]
     lines += summarize_screen(result, benchmark)
     if not as_of:
-        lines += ["", "UWAGA: ta tabela opisuje reżim, który się WŁAŚNIE SKOŃCZYŁ.",
-                  "Uruchom `--as-of` sprzed 10 lat i zobacz, co metoda wybrałaby wtedy",
-                  "— wskazała obligacje długoterminowe, które potem straciły 5%/rok",
-                  "i przestały dywersyfikować dokładnie w kryzysie 2022."]
+        lines += ["", t("cli.screen.regime_warning")]
     lines += ["=" * 88]
     return "\n".join(lines)
 
@@ -82,6 +77,7 @@ def main() -> None:
     args = p.parse_args()
 
     cfg = load_portfolio_config()
+    i18n.init(getattr(cfg, "display_language", None))
     benchmark = args.benchmark or cfg.screen.benchmark
     years = args.years or cfg.screen.years
     wanted = list(dict.fromkeys([benchmark, *cfg.screen.candidates, *args.add]))

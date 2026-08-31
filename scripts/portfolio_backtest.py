@@ -12,6 +12,7 @@ import logging
 
 import pandas as pd
 
+from trademon import i18n
 from trademon.portfolio.backtest import render_portfolio_report, run_portfolio_backtest
 from trademon.portfolio.config import load_portfolio_config
 from trademon.portfolio.data import download_etf, load_panel
@@ -34,6 +35,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_portfolio_config()
+    i18n.init(getattr(cfg, "display_language", None))
     if args.trend:
         cfg = cfg.model_copy(update={"trend": cfg.trend.model_copy(update={"enabled": True})})
 

@@ -16,6 +16,7 @@ import pandas as pd
 from trademon.crosssec.backtest import run_crosssec_backtest
 from trademon.crosssec.config import CrossSecConfig
 from trademon.crosssec.panels import load_market_panel
+from trademon.i18n import t
 
 log = logging.getLogger(__name__)
 
@@ -78,7 +79,9 @@ def run_matrix(cfg: CrossSecConfig) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-HURDLE_LABEL = {"long_only": "koszyk", "long_short": "gotówkę"}
+# The yardstick each direction is scored against, as catalogue keys — a long_only
+# book has to beat the basket, a market-neutral one only has to beat cash.
+HURDLE_KEY = {"long_only": "hurdle.basket", "long_short": "hurdle.cash"}
 
 
 def verdict(matrix: pd.DataFrame) -> list[str]:
@@ -95,11 +98,12 @@ def verdict(matrix: pd.DataFrame) -> list[str]:
         wins = int((exc > 0).sum())
         spread = float(exc.max() - exc.min())
         consistent = wins == len(exc) or wins == 0
-        lines.append(
-            f"{market:6s} {direction:11s}: bije {HURDLE_LABEL[direction]:9s} "
-            f"w {wins}/{len(exc)} oknach, nadwyżka od {exc.min():+.1f} do "
-            f"{exc.max():+.1f} pkt (rozrzut {spread:.1f} pkt) — "
-            + (("SPÓJNY znak" if wins else "SPÓJNIE UJEMNY") if consistent
-               else "znak SIĘ ZMIENIA -> to szum")
-        )
+        tail = t("verdict.sign.consistent" if wins else "verdict.sign.negative") \
+            if consistent else t("verdict.sign.flips")
+        lines.append(t("verdict.line", market=f"{market:6s}",
+                       direction=f"{direction:11s}",
+                       hurdle=f"{t(HURDLE_KEY[direction]):9s}",
+                       wins=wins, total=len(exc),
+                       lo=f"{exc.min():+.1f}", hi=f"{exc.max():+.1f}",
+                       spread=f"{spread:.1f}", tail=tail))
     return lines

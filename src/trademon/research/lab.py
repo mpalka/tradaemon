@@ -21,7 +21,7 @@ makes a multi-cell sweep cheap. Use scripts/train.py when you want fold AUCs.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -77,6 +77,36 @@ def test_slice(df: pd.DataFrame, window: Window, warmup_bars: int) -> tuple[pd.D
     return sub, first - start
 
 
+def window_frames(
+    pairs: dict[str, pd.DataFrame], window: Window, warmup_bars: int
+) -> tuple[dict[str, pd.DataFrame], pd.Timestamp]:
+    """`test_slice` for a whole book: frames cut to warmup + window, and the
+    timestamp trading may start at.
+
+    The book-level counterpart of `test_slice`. Traded jointly, the pairs no longer
+    share a row index, so the warmup prefix is expressed as a timestamp rather than
+    that function's integer offset — which is what `run_book_backtest`'s `trade_from`
+    takes. Pairs with no bar in the window, or with nothing beyond the warmup, are
+    dropped rather than passed on empty.
+    """
+    out = {}
+    lo = hi = None
+    for df in pairs.values():
+        w_lo, w_hi = window.bounds(df)
+        lo = w_lo if lo is None else min(lo, w_lo)
+        hi = w_hi if hi is None else max(hi, w_hi)
+    for symbol, df in pairs.items():
+        idx = df.index[df["timestamp"] >= lo]
+        if not len(idx):
+            continue
+        start = max(0, int(idx[0]) - warmup_bars)
+        sub = df.iloc[start:]
+        sub = sub[sub["timestamp"] <= hi].reset_index(drop=True)
+        if len(sub) > warmup_bars:
+            out[symbol] = sub
+    return out, lo
+
+
 def buy_hold_pct(df: pd.DataFrame, window: Window) -> float:
     lo, hi = window.bounds(df)
     w = df[(df["timestamp"] >= lo) & (df["timestamp"] <= hi)]
@@ -117,16 +147,26 @@ class ConstantBundle:
     p=1.0 on the long bundle and 0.0 on the short one gives always-long;
     swapped, always-short. A seeded uniform gives a random-entry control with a
     comparable trade count. Duck-types ModelBundle for run_backtest.
+
+    The generator is built once and then advances across calls. It used to be
+    rebuilt from the seed on every call, which handed *every pair the identical
+    probability series*: harmless where each pair is backtested on its own account
+    and only the trade count matters, but it makes the control useless on the book,
+    where the whole point is that pairs differ and compete for slots. An
+    uninformative model draws independently per pair; this one now does.
     """
     value: float
     feature_columns: list[str]
     metadata: dict
     seed: int | None = None
+    _rng: np.random.Generator | None = field(default=None, init=False, repr=False)
 
     def predict_proba(self, features: pd.DataFrame) -> np.ndarray:
         if self.seed is None:
             return np.full(len(features), self.value)
-        return np.random.default_rng(self.seed).random(len(features))
+        if self._rng is None:
+            self._rng = np.random.default_rng(self.seed)
+        return self._rng.random(len(features))
 
 
 def control_bundles(kind: str, seed: int = 7) -> dict[str, ModelBundle]:

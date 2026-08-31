@@ -1,25 +1,37 @@
-.venv/
-.env
-.env.local
-.env.*.local
+# Leading slashes matter. A bare `data/` matches a directory of that name at ANY
+# depth, so until 0.2.0 it also silently excluded the `src/trademon/data/` and
+# `src/trademon/models/` source packages — a clone of this repo did not import.
+# Anything meant to be a top-level artefact directory is anchored to the root.
+
+/.venv/
+/.env
+/.env.local
+/.env.*.local
+
 __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
-dist/
-build/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
 .coverage
-htmlcov/
 .DS_Store
 *.tmp
-runtime/
-data/
-models/
-.streamlit/
-.claude/
+
+/dist/
+/build/
+/htmlcov/
+
+# Runtime artefacts: written by the engine and the research scripts, never by hand.
+/runtime/
+/data/
+/models/
+
+/.streamlit/
+/.claude/
 config/*.overrides.yaml
+
+# Trained models and downloaded candles, wherever they land.
 *.joblib
 *.parquet

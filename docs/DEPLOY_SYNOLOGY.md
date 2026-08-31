@@ -1,214 +1,218 @@
-# Wdrożenie na Synology NAS
+# Deploying to a Synology NAS
 
-Przewodnik zakłada: NAS x86_64, obraz budowany bezpośrednio na NAS-ie (Container
-Manager), dostęp do panelu tylko z sieci lokalnej (bez wystawiania na świat).
+*English · [Polski](DEPLOY_SYNOLOGY.pl.md)*
 
-## 1. Wymagania wstępne
+This guide assumes: an x86_64 NAS, the image built directly on the NAS (Container
+Manager), and panel access from the local network only — nothing exposed to the internet.
 
-- **DSM 7.2+** z pakietem **Container Manager** (Centrum Pakietów).
-- **SSH włączone**: Panel sterowania → Terminal i SNMP → Włącz usługę SSH.
-- Folder współdzielony na projekt, docelowo `/volume1/docker/trademon` — patrz niżej.
+Throughout, `<nas>` is your NAS's hostname or IP and `<user>` is your DSM account.
+Substitute your own.
 
-### Skąd się bierze `/volume1/docker`
+## 1. Prerequisites
 
-Synology układa magazyn warstwowo: **dyski** → **pula pamięci masowej** (to jest
-RAID) → **wolumen** (pierwszy nazywa się `Volume 1` i ma ścieżkę `/volume1`) →
-**folder współdzielony** (np. `docker`, czyli `/volume1/docker`). Ścieżki
-`/volumeX` istnieją same z siebie, ale katalogu pod nimi musi odpowiadać
-istniejący folder współdzielony — inaczej kopiowanie odbije się o brak
-uprawnień.
+- **DSM 7.2+** with the **Container Manager** package (Package Center).
+- **SSH enabled**: Control Panel → Terminal & SNMP → Enable SSH service.
+- A shared folder for the project, ending up at `/volume1/docker/trademon` — see below.
 
-**Najpierw sprawdź, czy już go masz.** Instalacja Container Managera zwykle sama
-tworzy folder współdzielony `docker`. Zobacz w File Station (czy na liście jest
-`docker`) albo przez SSH:
+### Where `/volume1/docker` comes from
+
+Synology layers storage: **drives** → **storage pool** (the RAID) → **volume** (the first
+is called `Volume 1` and lives at `/volume1`) → **shared folder** (e.g. `docker`, giving
+`/volume1/docker`). The `/volumeX` paths exist on their own, but a directory under them
+must correspond to an existing shared folder — otherwise copying bounces off a
+permissions error.
+
+**Check whether you already have it.** Installing Container Manager usually creates a
+`docker` shared folder by itself. Look in File Station, or over SSH:
 
 ```bash
 ls -ld /volume1/docker
 ```
 
-**Jeśli go nie ma**: Panel sterowania → Folder współdzielony → Utwórz:
+**If it is missing**: Control Panel → Shared Folder → Create:
 
-- nazwa: `docker`
-- lokalizacja: `Volume 1` (albo ten wolumen, na którym masz miejsce)
-- **nie zaznaczaj szyfrowania** — zaszyfrowany folder nie montuje się sam po
-  restarcie NAS-a, więc kontenery z `restart: unless-stopped` wstałyby z pustym
-  katalogiem i księgi zaczęłyby od zera;
-- kosz i migawki wedle uznania, nie mają wpływu na działanie.
+- name: `docker`
+- location: `Volume 1` (or whichever volume has room)
+- **do not tick encryption** — an encrypted folder does not mount itself after a NAS
+  reboot, so containers with `restart: unless-stopped` would come back to an empty
+  directory and the books would start from zero;
+- recycle bin and snapshots as you like; they make no difference here.
 
-Podkatalog `trademon` utworzy się sam przy pierwszym kopiowaniu (krok 2) —
-nie musisz go klikać.
+The `trademon` subdirectory creates itself on the first copy (step 2) — you do not need
+to click it into existence.
 
-### Poza tym nie zakładasz żadnych katalogów ręcznie
+### Beyond that, you create no directories by hand
 
-`docker` to jedyny folder, który klikasz w DSM. Reszta powstaje sama:
+`docker` is the only folder you click in DSM. The rest appears on its own:
 
-| Katalog | Skąd się bierze |
+| Directory | Where it comes from |
 |---|---|
-| `trademon/` | `mkdir -p` w komendzie z kroku 2 |
-| `config/`, `src/`, `scripts/` | wysyłka źródła z kroku 3 |
-| `data/`, `models/`, `runtime/` | kopiowanie z kroku 2; a gdyby ich nie było, tworzy je sam kod ([config.py](../src/trademon/config.py)) przy starcie |
-| `runtime/<nazwa-księgi>/` | `RuntimeStore` przy pierwszym zapisie ([engine/state.py](../src/trademon/engine/state.py)) |
+| `trademon/` | the `mkdir -p` in step 2's command |
+| `config/`, `src/`, `scripts/` | the source upload in step 3 |
+| `data/`, `models/`, `runtime/` | the copy in step 2 — and failing that, the code creates them at startup ([config.py](../src/trademon/config.py)) |
+| `runtime/<book-name>/` | `RuntimeStore` on its first write ([engine/state.py](../src/trademon/engine/state.py)) |
 
-**Właśnie dlatego kolejność ma znaczenie.** Jeśli odpalisz kontenery przed
-skopiowaniem danych, katalogi powstaną — ale **puste**, a księgi zaczną liczyć
-od zera i stracisz ciągłość historii. Najpierw krok 2 (kopiowanie), dopiero potem
-krok 5 (start).
+**This is exactly why the order matters.** Start the containers before copying the data
+and the directories will appear — but **empty**, and the books will start counting from
+zero, losing the continuity of your history. Step 2 (copying) first, step 5 (starting)
+after.
 
-O uprawnienia nie musisz się martwić: kontenery działają jako root (`Dockerfile`
-nie ustawia `USER`), więc zapiszą się do plików niezależnie od tego, na jakiego
-użytkownika DSM przyjechały.
+You do not need to worry about permissions: the containers run as root (the `Dockerfile`
+sets no `USER`), so they can write regardless of which DSM user the files arrived as.
 
-**Ile miejsca zarezerwować.** Same dane projektu to dziś ~40 MB (`data/` 33 MB,
-`models/` 6 MB, `runtime/` 1 MB) i rosną wolno. Miejsce zjada obraz Dockera:
-python + pandas/numpy/pyarrow/duckdb/lightgbm/scikit-learn/streamlit to ok.
-1,5–2 GB, plus cache builda. **Licz ~5 GB wolnego** na wolumenie z zapasem na
-kolejne rebuildy. Sprawdzisz w Menedżerze magazynu → Wolumen.
+**How much space to set aside.** The project's own data is around 40 MB today (`data/`
+33 MB, `models/` 6 MB, `runtime/` 1 MB) and grows slowly. The Docker image is what eats
+space: python plus pandas/numpy/pyarrow/duckdb/lightgbm/scikit-learn/streamlit is roughly
+1.5–2 GB, plus the build cache. **Budget ~5 GB free** on the volume, with room for
+further rebuilds. Check in Storage Manager → Volume.
 
-## 2. Migracja istniejącej historii z Maca na NAS
+## 2. Migrating existing history to the NAS
 
-**Zrób to zanim odpalisz cokolwiek na NAS-ie.** `runtime/<book>/state.json`,
-`trades.jsonl`, `equity.jsonl` to cała dotychczasowa historia działania
-(stan ksiąg, dziennik transakcji, krzywa equity). `RuntimeStore` przy braku
-tych plików startuje księgę od zera — więc jeśli chcesz kontynuować, a nie
-zaczynać od nowa, musisz je skopiować.
+**Do this before you start anything on the NAS.** `runtime/<book>/state.json`,
+`trades.jsonl` and `equity.jsonl` are the entire history of the bot's operation — book
+state, the trade journal, the equity curve. With those files missing, `RuntimeStore`
+starts a book from zero, so if you want to continue rather than begin again, you have to
+copy them.
 
-**Najpierw wgraj klucz SSH** — bez niego każda kolejna komenda pyta o hasło,
-a część narzędzi (patrz niżej) w ogóle się nie zaloguje:
+**Upload an SSH key first** — without one every subsequent command asks for a password,
+and some tools (see below) will not log in at all:
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/synology2 -N "" -C "mac -> synology2"
-ssh-copy-id -i ~/.ssh/synology2.pub <user>@<nas>
+ssh-keygen -t ed25519 -f ~/.ssh/nas-key -N "" -C "workstation -> nas"
+ssh-copy-id -i ~/.ssh/nas-key.pub <user>@<nas>
 ssh <user>@<nas> 'chmod 755 ~ && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'
 ```
 
-Ostatnia linia jest istotna: DSM zostawia katalog domowy zapisywalny dla grupy,
-a sshd wtedy **po cichu ignoruje klucz** i wraca do pytania o hasło. Warto też
-dodać wpis w `~/.ssh/config` (`Host`, `User`, `IdentityFile`).
+That last line matters: DSM leaves the home directory group-writable, and sshd then
+**silently ignores the key** and falls back to asking for a password. It is also worth
+adding an entry to `~/.ssh/config` (`Host`, `User`, `IdentityFile`).
 
-Sam transfer — z Maca, z katalogu projektu:
+The transfer itself — from your machine, in the project directory:
 
 ```bash
 tar czf - data models runtime config | ssh <nas> 'mkdir -p /volume1/docker/trademon && tar xzf - -C /volume1/docker/trademon'
 ```
 
-> **Nie licz na rsync.** Na tym NAS-ie `rsync -avz ... <nas>:/volume1/...`
-> kończy się `Permission denied, please try again` i błędami
-> `io_read_nonblocking` / `io_read_buf`. Wygląda to jak odmowa logowania, ale
-> `ssh -v` pokazuje coś innego: `Authenticated ... using "publickey"`, sesja
-> wstaje, komenda `rsync --server ...` idzie do NAS-a i **dopiero zdalna strona**
-> odmawia. Czyli blokada jest po stronie DSM, nie w uwierzytelnianiu. Prawdopodobne
-> lekarstwo (niesprawdzone): Panel sterowania → Usługi plików → rsync → włącz
-> usługę. `tar` i `scp` działają bez tego, więc najprościej ich użyć.
+> **Do not count on rsync.** On some DSM setups `rsync -avz … <nas>:/volume1/…` ends in
+> `Permission denied, please try again` along with `io_read_nonblocking` / `io_read_buf`
+> errors. It looks like a login refusal, but `ssh -v` shows otherwise:
+> `Authenticated … using "publickey"`, the session comes up, the `rsync --server …`
+> command reaches the NAS, and **the remote side is what refuses**. So the block is on
+> the DSM side, not in authentication. The likely fix (untested here): Control Panel →
+> File Services → rsync → enable the service. `tar` and `scp` work without it, so they
+> are the simpler route.
+>
+> On macOS there is a second trap: `/usr/bin/rsync` is openrsync, which fails outright on
+> a password prompt even when plain `ssh` works. An SSH key plus `chmod 755 ~` on the DSM
+> side is the fix.
 
-Co dokładnie warto skopiować:
+What is worth copying:
 
-- `runtime/` — historia transakcji i equity, dla każdej księgi osobno.
-- `data/` — cache OHLCV (parquet), oszczędza ponowne pobieranie z Binance/Yahoo.
-- `models/` — wytrenowane modele + raporty z `models/reports/`.
-- `config/*.overrides.yaml` — ustawienia zapisane przez panel (np. przypięty
-  wariant A/B).
-- `.env` (jeśli używasz `ALERT_WEBHOOK_URL`) — kopiuj przez SFTP/SSH,
-  **nigdy przez git**, to sekret.
+- `runtime/` — trade and equity history, separately for each book.
+- `data/` — the OHLCV cache (Parquet); saves re-downloading from Binance/Yahoo.
+- `models/` — trained models plus the reports in `models/reports/`.
+- `config/*.overrides.yaml` — settings saved from the panel (e.g. a pinned A/B variant).
+- `.env` (if you use `ALERT_WEBHOOK_URL`) — copy it over SFTP/SSH, **never through git**;
+  it is a secret.
 
-## 3. Pobranie kodu na NAS
+## 3. Getting the code onto the NAS
 
-**DSM nie ma gita** (`git: command not found`), a repo jest prywatne — klonowanie
-na NAS-ie wymagałoby pakietu Git Server z Centrum Pakietów **i** tokenu GitHuba.
-Prościej wysłać źródło tym samym kanałem co dane.
+**DSM has no git** (`git: command not found`). You could install the Git Server package
+and clone, but for a single deployment it is simpler to send the source down the same
+channel as the data.
 
-Z Maca, z katalogu projektu:
+From your machine, in the project directory:
 
 ```bash
 COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/trademon'
 ```
 
-Lista jest jawna z rozmysłem: całe źródło waży ~1 MB, ale `.venv` obok niego
-718 MB. Przy `--exclude` łatwo o pomyłkę, przy wyliczeniu — nie.
+The list is explicit on purpose: the whole source is ~1 MB, but the `.venv` next to it is
+several hundred. With `--exclude` it is easy to make a mistake; with an enumeration it is
+not.
 
-`COPYFILE_DISABLE=1` powstrzymuje `tar` z macOS przed dopisywaniem plików
-`._nazwa` — kopii rozszerzonych atrybutów. Nie psują builda (Python ich nie
-zaimportuje), ale zaśmiecają obraz i sprawiają, że porównanie źródła NAS-a z
-Makiem nie wychodzi na zero, co przy diagnozie kosztuje czas.
+`COPYFILE_DISABLE=1` stops macOS `tar` from adding `._name` files — copies of extended
+attributes. They do not break the build (Python will not import them), but they clutter
+the image and make a source comparison between NAS and workstation fail to come out
+clean, which costs time during diagnosis. On Linux the variable is simply ignored.
 
-Do builda wystarczy to, co `Dockerfile` kopiuje (`pyproject.toml`, `src`,
-`config`, `scripts`) plus `docker-compose.yml`. `README.md` i `docs` jadą dla
-wygody.
+The build needs what the `Dockerfile` copies (`pyproject.toml`, `src`, `config`,
+`scripts`) plus `docker-compose.yml`. `README.md` and `docs` come along for convenience.
 
-Na koniec utwórz `.env` — musi istnieć, nawet pusty:
+Finally create `.env` — it must exist, even empty:
 
 ```bash
 ssh <nas> 'cd /volume1/docker/trademon && cp -n .env.example .env'
 ```
 
-Dlaczego wymagany: Container Manager ma starszą Compose, która nie zna
-rozszerzonej składni `env_file` (`- path: .env` + `required: false`) i wywala
-się na `services.bot.env_file.0 must be a string`. Dlatego
-`docker-compose.yml` używa zwykłego `- .env`, a ta forma nie umie być
-opcjonalna. Puste wartości nie przeszkadzają — klucze giełdy są potrzebne
-dopiero w trybie live.
+Why it is required: Container Manager ships an older Compose that does not understand the
+extended `env_file` syntax (`- path: .env` + `required: false`) and fails with
+`services.bot.env_file.0 must be a string`. So `docker-compose.yml` uses the plain
+`- .env` form, and that form cannot be optional. Empty values are fine — exchange keys
+are only needed in live mode.
 
-## 4. DNS dla kontenerów — najpierw zmierz, potem ustawiaj
+## 4. DNS for containers — measure first, configure second
 
-**`docker-compose.yml` celowo nie ustawia `dns:`.** Kiedyś ustawiał i to była
-pomyłka warta opisania, bo kosztowała wieczór.
+**`docker-compose.yml` deliberately does not set `dns:`.** It used to, and that was a
+mistake worth writing down, because it cost an evening.
 
-Teoria brzmiała rozsądnie: Compose tworzy sieć bridge z resolverem `127.0.0.11`,
-który przekazuje zapytania do `/etc/resolv.conf` NAS-a, a gdyby stał tam adres
-pętli zwrotnej (zdarza się na DSM przy pakiecie DNS Server), wewnątrz kontenera
-wskazywałby na sam kontener. Stąd pomysł na jawne, publiczne resolwery.
+The theory sounded reasonable: Compose creates a bridge network with a resolver at
+`127.0.0.11` that forwards queries to the NAS's `/etc/resolv.conf`, and if a loopback
+address sat there (which happens on DSM with the DNS Server package), inside a container
+it would point at the container itself. Hence the idea of pinning explicit public
+resolvers.
 
-Zmierzone na żywym NAS-ie okazało się fałszywe. `/etc/resolv.conf` zawierał
-`nameserver 10.0.0.1` — router, nie pętlę zwrotną — i odpowiadał **20/20 zapytań
-w 5 ms**, szybciej niż którykolwiek publiczny resolwer. Wpisanie `1.1.1.1`
-wypchnęło więc każde zapytanie przez NAT, dokładając zawodności tam, gdzie jej
-nie było, i rozwiązywanie nazw zaczęło się psuć z przerwami.
+Measured on a live NAS, that turned out to be false. `/etc/resolv.conf` held
+`nameserver 192.168.1.1` — the router, not a loopback — and answered **20/20 queries in
+5 ms**, faster than any public resolver. Pinning `1.1.1.1` therefore pushed every lookup
+out through NAT, adding unreliability where there had been none, and name resolution
+started failing intermittently.
 
-**Zasada:** domyślne zachowanie (embedded resolver → resolwer hosta) jest
-zarazem najkrótszą i najszybszą drogą. `dns:` dopisuj **dopiero** po
-potwierdzeniu, że resolwer hosta jest naprawdę zepsuty:
+**The rule:** the default behaviour (embedded resolver → the host's resolver) is both the
+shortest and the fastest path. Add `dns:` **only** after confirming the host's resolver
+is genuinely broken:
 
 ```bash
 ssh <nas> 'cat /etc/resolv.conf; python3 -c "import socket;print(socket.gethostbyname(\"api.binance.com\"))"'
 ```
 
-Adres pętli zwrotnej w `resolv.conf` albo wyjątek z `gethostbyname` = teoria się
-potwierdza, ustaw `dns:`. Cokolwiek innego = szukaj gdzie indziej.
+A loopback address in `resolv.conf`, or an exception from `gethostbyname`, means the
+theory holds and you should set `dns:`. Anything else means look elsewhere.
 
-**Uwaga, ważne:** ten sam komunikat (`Temporary failure in name resolution`)
-dostaniesz również wtedy, gdy przyczyna nie ma z DNS-em nic wspólnego — patrz
-„DNS czy brak NAT?" niżej. To właśnie ta pułapka wciągnęła nas w zmienianie
-resolwerów, gdy problem był poziom niżej.
+**An important caveat:** you get the same message (`Temporary failure in name
+resolution`) when the cause has nothing to do with DNS at all — see "DNS, or no way out?"
+below. That is precisely the trap that leads to swapping resolvers when the problem is a
+layer down.
 
-**Sprawdzenie po starcie — bez roota, samym SSH z kluczem.** Nie zaglądaj do
-kontenera (to wymaga `sudo`, patrz krok 5); zajrzyj do plików, które silnik
-zapisuje na dysku NAS-a:
+**Checking after startup — no root needed, just SSH with a key.** Do not go into the
+container (that needs `sudo`, see step 5); look at the files the engine writes to the
+NAS's disk:
 
 ```bash
-ssh <nas> 'python3 -c "import json;s=json.load(open(\"/volume1/docker/trademon/runtime/prog_050/state.json\"));print(s[\"updated_at\"], len(s[\"last_close\"]), \"par\")"'
+ssh <nas> 'python3 -c "import json;s=json.load(open(\"/volume1/docker/trademon/runtime/prog_050/state.json\"));print(s[\"updated_at\"], len(s[\"last_close\"]), \"pairs\")"'
 ```
 
-Ma pokazać świeży czas i **18 par** (tyle liczy `exchange.symbols` od 0.1.11;
-wcześniej 10). Zero par oznacza, że silnik nie dosięgnął
-giełdy i przewrócił się przed pierwszym pobraniem świec — czyli DNS nadal nie
-działa i nie ma sensu szukać przyczyny w kodzie bota. Drugi sygnał: `ls -l` na
-`runtime/prog_050/equity.jsonl` — jeśli `state.json` jest sprzed sekund, a
-`equity.jsonl` sprzed godzin, to trwa pętla restartów.
+It should show a fresh timestamp and **18 pairs** (that is what `exchange.symbols` counts
+since 0.1.11; it was 10 before). Zero pairs means the engine never reached the exchange
+and fell over before its first candle fetch — so DNS still is not working and there is no
+point looking for the cause in the bot's code. A second signal: `ls -l` on
+`runtime/prog_050/equity.jsonl` — if `state.json` is seconds old while `equity.jsonl` is
+hours old, a restart loop is in progress.
 
-Podgląd logów kontenera masz w Container Manager → *Kontener* → `trademon-bot-1`
-→ *Dziennik*.
+Container logs are in Container Manager → *Container* → `trademon-bot-1` → *Log*.
 
-### Gdy bot nie dosięga giełdy — zmierz z wnętrza kontenera
+### When the bot cannot reach the exchange — measure from inside the container
 
-`Temporary failure in name resolution` (`EAI_AGAIN`) znaczy tylko tyle, że
-**resolwer nie odpowiedział**. Nie znaczy, że winny jest DNS: zapytanie, które
-nie ma jak wyjść, daje identyczny komunikat. To nas raz kosztowało pół nocy
-zmieniania resolwerów, gdy przyczyna była zupełnie gdzie indziej.
+`Temporary failure in name resolution` (`EAI_AGAIN`) means only that **the resolver did
+not answer**. It does not mean DNS is at fault: a query with no way out produces an
+identical message. That once cost half a night of changing resolvers when the cause was
+somewhere else entirely.
 
-**Nie wnioskuj z hosta ani z plików stanu** — kontener ma własną przestrzeń
-sieciową, więc działający `nslookup` na DSM nie mówi o niej nic. Wejdź do
-środka: Container Manager → *Kontener* → `trademon-bot-1` → *Terminal* (bez ssh,
-bez roota) i wklej to. Obraz to `python:3.12-slim`, więc bez `dig`, `ping`
-i `curl` — Python załatwia sprawę:
+**Do not infer from the host or from state files** — the container has its own network
+namespace, so a working `nslookup` on DSM says nothing about it. Go inside: Container
+Manager → *Container* → `trademon-bot-1` → *Terminal* (no ssh, no root) and paste this.
+The image is `python:3.12-slim`, so there is no `dig`, `ping` or `curl` — Python does the
+job:
 
 ```bash
 python3 - <<'EOF'
@@ -217,7 +221,7 @@ import socket, struct, random
 def tcp(ip, port=443, t=5):
     s = socket.socket(); s.settimeout(t)
     try: s.connect((ip, port)); return "OK"
-    except Exception as e: return "BLAD: %s" % e
+    except Exception as e: return "FAILED: %s" % e
     finally: s.close()
 
 def dns(server, name="google.com", t=3):
@@ -226,149 +230,146 @@ def dns(server, name="google.com", t=3):
     p += b"\x00" + struct.pack(">HH", 1, 1)
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(t)
     try: s.sendto(p, (server, 53)); s.recvfrom(512); return "OK"
-    except Exception as e: return "BLAD: %s" % e
+    except Exception as e: return "FAILED: %s" % e
     finally: s.close()
 
-print("1. TCP po samym IP, bez DNS  :", tcp("18.244.94.121"))
-print("2. DNS wprost do 1.1.1.1     :", dns("1.1.1.1"))
-print("3. DNS wprost do routera     :", dns("10.0.0.1"))
-print("4. DNS przez resolwer Dockera:", dns("127.0.0.11"))
+# Substitute an address of your own for the first line: any host that answers on 443.
+# A hardcoded IP goes stale, and the point is only to test TCP without involving DNS.
+print("1. TCP by raw IP, no DNS       :", tcp("1.1.1.1"))
+print("2. DNS straight to 1.1.1.1     :", dns("1.1.1.1"))
+print("3. DNS straight to your router :", dns("192.168.1.1"))
+print("4. DNS via Docker's resolver   :", dns("127.0.0.11"))
 EOF
 ```
 
-| Wynik | Przyczyna |
+| Result | Cause |
 |---|---|
-| 1 pada | kontener nie ma żadnego wyjścia; DNS jest tylko pierwszą ofiarą |
-| 1 OK, 2–4 padają | **wychodzące UDP jest blokowane** — patrz niżej, to był nasz przypadek |
-| 1–3 OK, pada tylko 4 | wbudowany resolwer Dockera; ogranicz liczbę zapytań po stronie bota |
-| wszystko OK | trafiłeś w okno sprawności — powtórz kilka razy pod rząd |
+| 1 fails | the container has no way out at all; DNS is merely the first casualty |
+| 1 OK, 2–4 fail | **outbound UDP is blocked** — see below; this was the case here |
+| 1–3 OK, only 4 fails | Docker's embedded resolver; reduce the query rate on the bot's side |
+| everything OK | you hit a working window — repeat it several times in a row |
 
-#### Zapora DSM a podsieć kontenerów (to był nasz przypadek)
+#### The DSM firewall versus the container subnet
 
-Profil zapory kończy się regułą **Deny All**, a wcześniejsza reguła Allow
-przepuszczała `172.17.0.1/255.255.255.0` — czyli **domyślny** mostek Dockera.
-Projekt pracuje w sieci `trademon_default` = `172.18.0.0/16`, więc do żadnej
-reguły Allow nie pasował i wpadał w Deny. Maska `255.255.255.0` jest przy tym za
-wąska nawet dla `172.17`, bo Docker rozdaje adresy z całego `/16`.
+A firewall profile ends in a **Deny All** rule. If the Allow rule above it covers
+`172.17.0.1/255.255.255.0` — the **default** Docker bridge — but Compose put the project
+on its own network (`trademon_default` = `172.18.0.0/16`), the project's traffic matches
+no Allow rule and falls into Deny. That netmask is too narrow even for `172.17`, because
+Docker hands out addresses from the whole `/16`.
 
-Efekt był myląco łagodny: **ginęło samo UDP/53, TCP przechodziło**. Bot żył więc
-na trzymanych połączeniach keep-alive i psuł się dopiero, gdy musiał rozwiązać
-nazwę od nowa — co wyglądało jak migotanie łączności, nie jak blokada.
+The effect is misleadingly mild: **UDP/53 alone is dropped while TCP passes**. The bot
+then lives on held-open keep-alive connections and only breaks when it has to resolve a
+name afresh — which looks like flickering connectivity rather than a block.
 
-**Lek:** Panel sterowania → Zabezpieczenia → Zapora → edytuj profil, i **ponad**
-końcowym Deny dodaj: Ports=All, Protocol=All, Source IP `172.16.0.0`, maska
-`255.240.0.0`, Action=Allow. Szeroko z rozmysłem — obejmuje
-`172.16.0.0–172.31.255.255`, więc przetrwa odtworzenie projektu, przy którym
-Docker bierze kolejną wolną podsieć. Regułę na `172.17` można wtedy usunąć.
+**The fix:** Control Panel → Security → Firewall → edit the profile, and **above** the
+final Deny add: Ports=All, Protocol=All, Source IP `172.16.0.0`, netmask `255.240.0.0`,
+Action=Allow. Deliberately broad — it covers `172.16.0.0–172.31.255.255`, so it survives
+recreating the project, when Docker takes the next free subnet. The `172.17` rule can
+then be removed.
 
-## 5. Start kontenerów
+## 5. Starting the containers
 
-**Container Manager GUI — to jest droga, która działa.** Zakładka *Projekt* →
-*Utwórz* → wskaż folder z `docker-compose.yml` → build. Przy kolejnych zmianach
-kodu: *Projekt* → zaznacz projekt → **Zatrzymaj** → *Akcja* → **Kompiluj** →
-*Uruchom*. To odpowiednik `docker compose up -d --build`; samo *Uruchom*
-**nie przebudowuje obrazu** i zostawia stary kod, co wygląda jak wdrożenie,
-które nic nie zmieniło.
+**The Container Manager GUI is the route that works.** *Project* tab → *Create* → point
+at the folder with `docker-compose.yml` → build. For later code changes: *Project* →
+select the project → **Stop** → *Action* → **Build** → *Run*. That is the equivalent of
+`docker compose up -d --build`; *Run* on its own **does not rebuild the image** and
+leaves the old code in place, which looks like a deployment that changed nothing.
 
-Zatrzymanie nie jest opcjonalne: na działającym projekcie GUI nie daje
-przebudować obrazu. Kolejność stop → kompiluj → uruchom jest więc pełną
-procedurą, a nie ostrożnościowym dodatkiem.
+Stopping is not optional: the GUI will not rebuild the image of a running project. So
+stop → build → run is the whole procedure, not a cautious extra.
 
-**Dlaczego nie po SSH.** Kuszące jest `ssh <nas> 'sudo docker compose up -d
---build'`, ale wykłada się dwa razy i za każdym razem inaczej:
+**Why not over SSH.** `ssh <nas> 'sudo docker compose up -d --build'` is tempting, but it
+fails twice, differently each time:
 
-1. W nieinteraktywnym `ssh <nas> '<komenda>'` PATH jest okrojony i `docker`
-   kończy się `command not found` — binarka leży w `/usr/local/bin/docker`.
-2. Nawet z pełną ścieżką `sudo` na DSM **żąda hasła** (`sudo -n` zwraca
-   „a password is required"), a socket `/var/run/docker.sock` należy do
-   `root:root` z prawami `srw-rw----`, więc bez roota nie ma dostępu. Konta w
-   grupie `administrators` to nie zmienia — nie ma tu grupy `docker`.
+1. In a non-interactive `ssh <nas> '<command>'` the PATH is trimmed and `docker` ends in
+   `command not found` — the binary is at `/usr/local/bin/docker`.
+2. Even with the full path, `sudo` on DSM **demands a password** (`sudo -n` returns "a
+   password is required"), and the `/var/run/docker.sock` socket is `root:root` with
+   `srw-rw----`, so there is no access without root. Being in the `administrators` group
+   does not change that — there is no `docker` group here.
 
-Zostaje `ssh -t <nas>` i wpisanie hasła ręcznie, ale skoro i tak siadasz do
-klawiatury, GUI jest szybsze i mniej zawodne. Do **odczytu** SSH nadaje się
-świetnie i klucz wystarcza — patrz weryfikacja niżej.
+That leaves `ssh -t <nas>` and typing the password by hand, but if you are sitting at the
+keyboard anyway, the GUI is faster and less error-prone. For **reading**, SSH is
+excellent and a key is enough — see the verification below.
 
-`docker-compose.yml` ma już `restart: unless-stopped` na każdym serwisie, więc
-po restarcie NAS-a kontenery wracają same — warto tylko zweryfikować w
-Container Manager, że projekt ma włączone "Uruchom przy starcie".
+`docker-compose.yml` already has `restart: unless-stopped` on every service, so the
+containers come back on their own after a NAS reboot — just verify in Container Manager
+that the project has "run on startup" enabled.
 
-## 6. Dostęp z LAN
+## 6. LAN access
 
-Panel: `http://<adres-ip-nas>:8501`, w sieci domowej.
+The panel: `http://<nas-ip>:8501`, on your home network.
 
-- **Nie** przekierowuj portu 8501 na routerze.
-- Jeśli zapora DSM jest włączona, rozważ regułę w Panel sterowania →
-  Zabezpieczenia → Zapora ograniczającą port 8501 do podsieci LAN.
-- Warto ustawić NAS-owi stały adres IP (rezerwacja DHCP na routerze), żeby
-  link się nie zmieniał.
+- **Do not** forward port 8501 on your router. The panel has no authentication and lets
+  anyone who reaches it change the running configuration.
+- If the DSM firewall is on, consider a rule under Control Panel → Security → Firewall
+  restricting port 8501 to the LAN subnet.
+- Give the NAS a fixed IP (a DHCP reservation on the router) so the link stops changing.
 
-## 7. Zasoby: serwis `refresher`
+## 7. Resources: the `refresher` service
 
-`refresher` trenuje LightGBM raz w tygodniu (`scripts/refresh.py`). Na
-słabszym NAS-ie (mało RAM/CPU) może to być zauważalnie wolniejsze niż na
-Macu. Dwie opcje:
+`refresher` trains LightGBM once a week (`scripts/refresh.py`). On a weaker NAS (little
+RAM or CPU) that can be noticeably slower than on a workstation. Two options:
 
-- Zostaw jak jest — i tak działa w tle, raz na 7 dni, nie blokuje dashboardu.
-- Wyłącz na NAS-ie (`docker compose stop refresher` albo zakomentuj serwis w
-  `docker-compose.yml`) i dalej trenuj lokalnie na Macu, wysyłając potem samo
-  `models/` (`tar czf - models | ssh <nas> 'tar xzf - -C /volume1/docker/trademon'`).
+- Leave it — it runs in the background once every 7 days and does not block the dashboard.
+- Disable it on the NAS (`docker compose stop refresher`, or comment the service out of
+  `docker-compose.yml`) and keep training locally, then send just `models/` across
+  (`tar czf - models | ssh <nas> 'tar xzf - -C /volume1/docker/trademon'`).
 
-## 8. Aktualizacja aplikacji później
+## 8. Updating the application later
 
-Bez gita na NAS-ie aktualizacja to wysyłka źródła (SSH, klucz wystarcza) i
-przebudowa obrazu (GUI, bo wymaga roota — patrz krok 5). Poniżej cztery kroki,
-bo dwa środkowe łatwo wykonać w sposób, który wygląda na udany i nie jest.
+With no git on the NAS, an update means sending the source (SSH; a key is enough) and
+rebuilding the image (the GUI, because that needs root — see step 5). Four steps below,
+because the middle two are easy to perform in a way that looks successful and is not.
 
-**1. Sprawdź, czy nie wyślesz cudzych ustawień.**
+**1. Check you are not about to send someone else's settings.**
 
 ```bash
 ls config/*.overrides.yaml
 ```
 
-Ten plik pisze panel — i ten na NAS-ie żyje własnym życiem. Tar go nie kasuje,
-ale **nadpisuje**, jeśli masz lokalną kopię, więc ustawienia zapisane z panelu
-na NAS-ie cofną się do tego, co akurat leży na Macu. Raz nas to kosztowało
-przywrócenie limitu pozycji, który przed chwilą został z panelu zdjęty. Jeśli
-lokalna kopia jest tylko pozostałością po zabawie u siebie — skasuj ją przed
-wysyłką.
+The panel writes that file, and the one on the NAS lives its own life. Tar does not
+delete it, but it **overwrites** it if you have a local copy, so settings saved from the
+panel on the NAS revert to whatever happens to be on your machine. That once cost a
+restored position cap that had just been lifted from the panel. If your local copy is
+only a leftover from experimenting at home, delete it before sending.
 
-**2. Wyślij źródło.** Z Maca, po `git pull` u siebie:
+**2. Send the source.** From your machine, after a `git pull`:
 
 ```bash
 COPYFILE_DISABLE=1 tar czf - src scripts config Dockerfile docker-compose.yml pyproject.toml .env.example README.md docs | ssh <nas> 'tar xzf - -C /volume1/docker/trademon'
 ```
 
-**3. Przebuduj obraz.** Container Manager → *Projekt* → `trademon` →
-**Zatrzymaj** → *Akcja* → **Kompiluj** → *Uruchom*. Zatrzymanie jest wymagane:
-na działającym projekcie GUI nie pozwoli przebudować obrazu. Samo *Uruchom* bez
-*Kompiluj* podniesie stary obraz i nic się nie zmieni.
+**3. Rebuild the image.** Container Manager → *Project* → `trademon` → **Stop** →
+*Action* → **Build** → *Run*. Stopping is required: the GUI will not rebuild a running
+project's image. *Run* without *Build* brings the old image back up and nothing changes.
 
-**4. Sprawdź, że naprawdę się przebudowało.** `src/` jest wkompilowane w obraz
-(`COPY src` + `pip install .`), a nie zamontowane, więc świeże pliki na dysku
-NAS-a **nie** znaczą świeżego kodu w kontenerze.
+**4. Verify it really rebuilt.** `src/` is compiled into the image (`COPY src` +
+`pip install .`) rather than mounted, so fresh files on the NAS's disk do **not** mean
+fresh code in the container.
 
-Numer wersji pod tytułem na `http://<nas>:8501` jest pierwszym sprawdzeniem, ale
-**dowodzi tylko tego, że świeży jest kontener panelu**. Silnik to osobny
-kontener i potrafi przy niedokończonym wdrożeniu chodzić dalej na starym
-obrazie — z zewnątrz wygląda to na udaną aktualizację. Silnik pytaj osobno:
+The version number under the title at `http://<nas>:8501` is the first check, but it
+**only proves the dashboard container is fresh**. The engine is a separate container and
+can, after an unfinished deployment, keep running on the old image — which from outside
+looks like a successful update. Ask the engine separately:
 
 ```bash
-ssh <nas> 'python3 -c "import json;s=json.load(open(\"/volume1/docker/trademon/runtime/prog_050/state.json\"));print(s[\"updated_at\"]);print(s.get(\"live_config\",\"BRAK — silnik nadal stary\"))"'
+ssh <nas> 'python3 -c "import json;s=json.load(open(\"/volume1/docker/trademon/runtime/prog_050/state.json\"));print(s[\"updated_at\"]);print(s.get(\"live_config\",\"MISSING — the engine is still the old one\"))"'
 ```
 
-Świeży `updated_at` **i** obecny `live_config` (klucz istnieje od 0.1.7) znaczą,
-że nowy silnik naprawdę wstał. Świeży `updated_at` bez `live_config` to obraz
-sprzed aktualizacji, który wciąż handluje.
+A fresh `updated_at` **and** a present `live_config` (the key exists since 0.1.7) mean the
+new engine really came up. A fresh `updated_at` without `live_config` is a
+pre-update image that is still trading.
 
-`config/`, `data/`, `models/`, `runtime/` są zamontowane z zewnątrz kontenera
-(bind mount), więc rebuild obrazu nigdy nie rusza historii. Uwaga na `config/`:
-tar **nadpisuje** każdy plik, który ma u siebie, więc bazowe `config/*.yaml`
-przyjadą z Maca. Nadpisania z panelu przetrwają tylko wtedy, gdy nie masz ich
-lokalnej kopii — dlatego krok 1 każe sprawdzić to przed wysyłką, a nie po.
+`config/`, `data/`, `models/` and `runtime/` are bind-mounted from outside the container,
+so rebuilding the image never touches history. Watch out for `config/`: tar
+**overwrites** every file it carries, so the baseline `config/*.yaml` arrive from your
+machine. Panel overrides survive only if you have no local copy of them — which is why
+step 1 tells you to check before sending, not after.
 
 ## 9. Backup
 
-`runtime/` to jedyny katalog z realną, nieodtwarzalną historią (transakcje,
-equity). Warto objąć `/volume1/docker/trademon` istniejącym mechanizmem
-Synology — Hyper Backup albo migawki wolumenu — zamiast liczyć wyłącznie na
-to, że dysk NAS-a nigdy nie padnie.
+`runtime/` is the only directory holding real, unreproducible history (trades, equity).
+It is worth bringing `/volume1/docker/trademon` into an existing Synology mechanism —
+Hyper Backup, or volume snapshots — rather than relying solely on the NAS's disk never
+failing.

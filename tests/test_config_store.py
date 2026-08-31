@@ -13,7 +13,7 @@ import pytest
 import yaml
 
 from trademon import config_store as cs
-from trademon.config import load_config, overrides_path
+from trademon.config import Config, load_config, overrides_path
 from trademon.engine.loop import Book
 from trademon.engine.state import RuntimeStore
 from trademon.execution.executors import PaperExecutor
@@ -122,12 +122,12 @@ def test_live_mode_cannot_be_set_from_the_dashboard(cfg_path, tmp_path):
 
 def test_journal_records_old_and_new_values(cfg_path, tmp_path):
     runtime = tmp_path / "runtime"
-    cs.apply_changes(cfg_path, runtime, {"strategy.prob_threshold": 0.45}, actor="marcin")
+    cs.apply_changes(cfg_path, runtime, {"strategy.prob_threshold": 0.45}, actor="tester")
     rows = cs.load_history(runtime)
     assert len(rows) == 1
     assert rows[0]["field"] == "strategy.prob_threshold"
     assert (rows[0]["old"], rows[0]["new"]) == (0.60, 0.45)
-    assert rows[0]["actor"] == "marcin"
+    assert rows[0]["actor"] == "tester"
 
 
 def test_unchanged_value_is_not_journaled(cfg_path, tmp_path):
@@ -448,3 +448,40 @@ def test_drift_ignores_a_book_written_by_an_older_engine(cfg_path, tmp_path):
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "state.json").write_text(json.dumps({"cash": 1000.0}))
     assert cs.live_drift(cfg_path, runtime) == []
+
+
+# ---------------------------------------------------------------------------
+# the shipped config itself
+# ---------------------------------------------------------------------------
+
+
+def _shipped() -> Config:
+    """The real config/config.yaml, not a fixture — overrides deliberately ignored
+    so this tests what is committed, not what a local panel edit did to it."""
+    from trademon.config import PROJECT_ROOT
+    path = PROJECT_ROOT / "config" / "config.yaml"
+    return Config.model_validate(yaml.safe_load(path.read_text()))
+
+
+def test_shipped_config_parses():
+    """Nothing else in the suite reads config/config.yaml, so a typo there used to
+    surface only on the NAS — where a rebuild goes through the Container Manager GUI
+    and costs a deploy cycle to find out."""
+    assert _shipped().exchange.symbols
+
+
+def test_shipped_variant_names_are_unique():
+    """Two variants of one name means two books sharing `runtime/<name>/`: one
+    state.json overwritten twice a minute and two strategies' trades merged into one
+    journal, with nothing in the panel to suggest the comparison is fiction."""
+    names = [v.name for v in _shipped().variants]
+    assert len(names) == len(set(names)), f"zduplikowany wariant: {names}"
+
+
+def test_shipped_primary_variant_exists():
+    """`primary_variant` pins which book the beginner screen calls "Twój portfel".
+    Pointing it at a name no variant has does not fail loudly — it silently falls
+    back, and the main screen then shows a book nobody chose."""
+    cfg = _shipped()
+    if cfg.primary_variant is not None:
+        assert cfg.primary_variant in {v.name for v in cfg.variants}
